@@ -11,6 +11,7 @@ module String = FStar.String
 type char = Char.char
 
 let char_from_codepoint (codepoint: nat{ codepoint < 0xd7ff \/ ((0xe000 <= codepoint) /\ (codepoint <= 0x10ffff))}) : char = Char.char_of_u32 (U32.uint_to_t codepoint)
+let char_to_str (c: char) : string = String.string_of_list [c]
 
 type
   json_ws: Type =
@@ -203,78 +204,77 @@ type
 let rec render_json_ws (ws: json_ws) : string = 
   match ws with
     | NoWhitespace -> ""
-    | Whitespace c ws' -> String.concat "" [(String.string_of_char c); render_json_ws ws']
+    | Whitespace c ws' -> (char_to_str c) ^ (render_json_ws ws')
 
 let render_json_sign (sign: json_sign) : string =
   match sign with
     | NoSign -> ""
-    | PlusMinus c -> String.string_of_char c
+    | PlusMinus c -> char_to_str c
 
 let render_json_onenine (x: json_onenine) : string =
   match x with
-    | OneNine c -> String.string_of_char c
+    | OneNine c -> char_to_str c
 
 let render_json_digit (d: json_digit) : string =
   match d with
-    | DigitZero c -> String.string_of_char c
+    | DigitZero c -> char_to_str c
     | DigitOneNine d -> render_json_onenine d
 
 let render_json_hex (h: json_hex) : string =
   match h with
     | HexDigit d -> render_json_digit d
-    | HexAF c -> String.string_of_char c
+    | HexAF c -> char_to_str c
 
 let render_json_escape (e: json_escape) : string =
   match e with
-    | Escape c -> String.string_of_char c
-    | HexCode u h0 h1 h2 h3 -> String.concat "" [
-        String.string_of_char u; 
-        render_json_hex h0;
-        render_json_hex h1;
-        render_json_hex h2;
-        render_json_hex h3;
-      ]
+    | Escape c -> char_to_str c
+    | HexCode u h0 h1 h2 h3 -> 
+        (char_to_str u) ^
+        (render_json_hex h0) ^
+        (render_json_hex h1) ^
+        (render_json_hex h2) ^
+        (render_json_hex h3)
 
 let rec render_json_digits (d: json_digits) : string =
   match d with
     | DigitsSingle d' -> render_json_digit d'
-    | Digits d' digits -> String.concat "" [render_json_digit d'; render_json_digits digits]
+    | Digits d' digits -> (render_json_digit d') ^ (render_json_digits digits)
 
 let render_json_fraction (f: json_fraction) : string =
   match f with
     | NoFraction -> ""
-    | Fraction period digits -> String.concat "" [String.string_of_char period; render_json_digits digits]
+    | Fraction period digits -> (char_to_str period) ^ (render_json_digits digits)
 
 let render_json_exponent (exp: json_exponent) : string =
   match exp with
     | NoExponent -> ""
-    | Exponent e sign digits -> String.concat "" [String.string_of_char e; render_json_sign sign; render_json_digits digits]
+    | Exponent e sign digits -> (char_to_str e) ^ (render_json_sign sign) ^ (render_json_digits digits)
 
 let render_json_integer (int: json_integer) : string =
   match int with
     | IntDigit digit -> render_json_digit digit
-    | IntDigits onenine digits -> String.concat "" [render_json_onenine onenine; render_json_digits digits]
-    | IntNegDigit c digit -> String.concat "" [String.string_of_char c; render_json_digit digit]
-    | IntNegDigits c onenine digits -> String.concat "" [String.string_of_char c; render_json_onenine onenine; render_json_digits digits]
+    | IntDigits onenine digits -> (render_json_onenine onenine) ^ (render_json_digits digits)
+    | IntNegDigit c digit -> (char_to_str c) ^ (render_json_digit digit)
+    | IntNegDigits c onenine digits -> (char_to_str c) ^ (render_json_onenine onenine) ^ (render_json_digits digits)
 
 
 let render_json_number (num: json_number) : string =
   match num with
-    | Number int frac exp -> String.concat "" [render_json_integer int; render_json_fraction frac; render_json_exponent exp]
+    | Number int frac exp -> (render_json_integer int) ^ (render_json_fraction frac) ^ (render_json_exponent exp)
 
 let render_json_character (char: json_character) : string =
   match char with
-    | Character c -> String.string_of_char c
-    | EscapedCharacter c escape -> String.concat "" [String.string_of_char c; render_json_escape escape]
+    | Character c -> char_to_str c
+    | EscapedCharacter c escape -> (char_to_str c) ^ (render_json_escape escape)
 
 let rec render_json_characters (chars: json_characters) : string =
   match chars with
     | NoCharacters -> ""
-    | Characters char chars -> String.concat "" [render_json_character char; render_json_characters chars]
+    | Characters char chars -> (render_json_character char) ^ (render_json_characters chars)
 
 let render_json_string (str: json_string) : string =
   match str with
-    | String open_quote chars close_quote -> String.concat "" [String.string_of_char open_quote; render_json_characters chars; String.string_of_char close_quote]
+    | String open_quote chars close_quote -> (char_to_str open_quote) ^ (render_json_characters chars) ^ (char_to_str close_quote)
 
 let rec 
   render_json_value (value: json_value) : string = 
@@ -288,31 +288,31 @@ let rec
   and
   render_json_object (obj: json_object) : string =
     match obj with
-      | EmptyObject open_brace ws close_brace -> String.concat "" [String.string_of_char open_brace; render_json_ws ws; String.string_of_char close_brace]
-      | Object open_brace members close_brace -> String.concat "" [String.string_of_char open_brace; render_json_members members; String.string_of_char close_brace]
+      | EmptyObject open_brace ws close_brace -> (char_to_str open_brace) ^ (render_json_ws ws) ^ (char_to_str close_brace)
+      | Object open_brace members close_brace -> (char_to_str open_brace) ^ (render_json_members members) ^ (char_to_str close_brace)
   and
   render_json_members (mems: json_members) : string =
     match mems with
       | SingletonMember m -> render_json_member m
-      | Members mem comma mems' -> String.concat "" [render_json_member mem; String.string_of_char comma; render_json_members mems']
+      | Members mem comma mems' -> (render_json_member mem) ^ (char_to_str comma) ^ (render_json_members mems')
   and
   render_json_member (mem: json_member) : string =
     match mem with
-      | Member ws0 str ws1 colon elem -> String.concat "" [render_json_ws ws0; render_json_string str; render_json_ws ws1; String.string_of_char colon; render_json_element elem]
+      | Member ws0 str ws1 colon elem -> (render_json_ws ws0) ^ (render_json_string str) ^ (render_json_ws ws1) ^ (char_to_str colon) ^ (render_json_element elem)
   and
   render_json_array (arr: json_array) : string =
     match arr with
-      | EmptyArray open_bracket ws close_bracket -> String.concat "" [String.string_of_char open_bracket; render_json_ws ws; String.string_of_char close_bracket]
-      | Array open_bracket elems close_bracket -> String.concat "" [String.string_of_char open_bracket; render_json_elements elems; String.string_of_char close_bracket]
+      | EmptyArray open_bracket ws close_bracket -> (char_to_str open_bracket) ^ (render_json_ws ws) ^ (char_to_str close_bracket)
+      | Array open_bracket elems close_bracket -> (char_to_str open_bracket) ^ (render_json_elements elems) ^ (char_to_str close_bracket)
   and
   render_json_elements (elems: json_elements) : string =
     match elems with
       | SingletonElements elem -> render_json_element elem
-      | Elements elem comma elems' -> String.concat "" [render_json_element elem; String.string_of_char comma; render_json_elements elems']
+      | Elements elem comma elems' -> (render_json_element elem) ^ (char_to_str comma) ^ (render_json_elements elems')
   and
   render_json_element (elem: json_element) : string = 
     match elem with
-      | Element ws0 value ws1 -> String.concat "" [render_json_ws ws0; render_json_value value; render_json_ws ws1]
+      | Element ws0 value ws1 -> (render_json_ws ws0) ^ (render_json_value value) ^ (render_json_ws ws1)
 
 let render_json (x: json) : string = 
   match x with
