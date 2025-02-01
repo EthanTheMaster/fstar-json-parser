@@ -293,3 +293,91 @@ let parse_json_onenine_completeness (onenine: json_onenine) :
   string_of_list_eq tail [];
   assert((Some?.v parsed).remainder == "")
 
+let parse_json_digit (s: string) : option (parser_result json_digit) =
+  match String.list_of_string s with
+    | [] -> None
+    | c::tail -> 
+      if char_from_codepoint 0x30 = c then
+        // Zero
+        Some { result = DigitZero c; remainder = String.string_of_list tail}
+      else 
+        match parse_json_onenine s with
+          | Some res -> Some {
+            result = DigitOneNine res.result;
+            remainder = res.remainder
+          }
+          | None -> None
+
+let parse_json_digit_soundness (s: string) :
+  Lemma
+  (requires Some? (parse_json_digit s))
+  (ensures (parser_soundness parse_json_digit render_json_digit s)) 
+  = 
+  let c::tail = String.list_of_string s in
+  str_decompose s [c] tail;
+  match parse_json_onenine s with
+    | Some res -> (
+      parse_json_onenine_soundness s
+    )
+    | None -> ()
+
+let parse_json_digit_completeness (digit: json_digit) :
+  Lemma
+  (ensures (parser_completeness parse_json_digit render_json_digit digit))
+  =
+  let rendered_digit = render_json_digit digit in
+  match digit with 
+    | DigitZero c -> (
+      list_of_string_eq rendered_digit (G.char_to_str c);
+      String.list_of_string_of_list [c];
+      let c::tail = String.list_of_string rendered_digit in
+      string_of_list_eq tail []
+    )
+    | DigitOneNine onenine -> (
+      parse_json_onenine_completeness onenine
+    )
+
+let parse_json_hex (s: string) : option (parser_result json_hex) =
+  match String.list_of_string s with
+    | [] -> None
+    | c::tail -> 
+      let codepoint = U32.v (Char.u32_of_char c) in
+      let is_af = (0x41 <= codepoint && codepoint <= 0x46) || (0x61 <= codepoint && codepoint <= 0x66) in
+      if is_af then
+        Some { result = HexAF c; remainder = String.string_of_list tail}
+      else 
+        match parse_json_digit s with
+          | Some res -> Some {
+            result = HexDigit res.result;
+            remainder = res.remainder
+          }
+          | None -> None
+
+let parse_json_hex_soundness (s: string) :
+  Lemma
+  (requires Some? (parse_json_digit s))
+  (ensures (parser_soundness parse_json_hex render_json_hex s)) 
+  = 
+  let c::tail = String.list_of_string s in
+  str_decompose s [c] tail;
+  match parse_json_digit s with
+    | Some res -> (
+      parse_json_digit_soundness s
+    )
+    | None -> ()
+
+let parse_json_hex_completeness (hex: json_hex) :
+  Lemma
+  (ensures (parser_completeness parse_json_hex render_json_hex hex))
+  =
+  let rendered_hex = render_json_hex hex in
+  match hex with 
+    | HexDigit digit -> (
+      parse_json_digit_completeness digit
+    )
+    | HexAF c -> (
+      list_of_string_eq rendered_hex (G.char_to_str c);
+      String.list_of_string_of_list [c];
+      let c::tail = String.list_of_string rendered_hex in
+      string_of_list_eq tail []
+    )
