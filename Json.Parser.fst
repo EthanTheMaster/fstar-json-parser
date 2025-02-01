@@ -16,13 +16,44 @@ module String = FStar.String
 
 type char = Char.char
 
-let str_to_char (s: string{String.strlen s == 1}) : char = let c::_ = String.list_of_string s in c
+let str_to_char (s: string{String.strlen s = 1}) : char = let c::_ = String.list_of_string s in c
 
 // This type holds a successful parsing of a string which is decomposed in a parsed prefix and the remainder of the string
 type parser_result a = {
   result: a;
   remainder: string;
 }
+
+// Correctness properties of a parser
+
+// A parser is considered sound if whenever it successfully parses a string, then the parsing is valid in the
+// sense that rendering the parse tree according to the production rule yields the original string.
+let parser_soundness 
+  (#production_rule: Type) 
+  (parser: string -> (option (parser_result production_rule)))
+  (renderer: production_rule -> string)
+  (s: string)
+  =
+  match parser s with
+    | Some parsed -> (s == renderer parsed.result ^ parsed.remainder)
+    | None -> True
+
+// A parser is considered complete if whenever it is presented with a string generated from a production rule,
+// then the parser recovers the original production rule.
+let parser_completeness
+  (#production_rule: Type) 
+  (parser: string -> option (parser_result production_rule))
+  (renderer: production_rule -> string)
+  (rule: production_rule)
+  =
+  let rendered_rule = renderer rule in
+  let parsed = parser rendered_rule in
+  (Some? parsed) /\ (Some?.v parsed).result == rule /\ (Some?.v parsed).remainder == ""
+
+// Helper function to convert infallible parsers into a "fallible" parser
+let infallible_to_fallible_parser (#production_rule: Type) (parser: string -> parser_result production_rule) = 
+  fun (s:string) -> Some (parser s)
+  
 
 type nonempty_str = s:string{match String.list_of_string s with | c::tail -> true | _ -> false }
 
@@ -59,6 +90,7 @@ let str_tail_decrease (s: nonempty_str) :
   // len(tail_str) < len(s)
 
 let list_of_string_eq (s1 s2: string): Lemma (requires s1 == s2) (ensures String.list_of_string s1 == String.list_of_string s2) = ()
+let string_of_list_eq (l1 l2: list char): Lemma (requires l1 == l2) (ensures String.string_of_list l1 == String.string_of_list l2) = ()
 
 // Utility lemma proving that string concatenation is associative
 let str_concat_assoc (s1 s2 s3: string) : Lemma (ensures ((s1 ^ s2) ^ s3) == (s1 ^ (s2 ^ s3))) =
@@ -113,10 +145,7 @@ let prepend_empty_is_identity (s: string) : Lemma (ensures ("" ^ s) == s) =
 
 let rec parse_json_ws_soundness (s: string) :
   Lemma 
-  (ensures (
-    let parsed = parse_json_ws s in
-    s == (G.render_json_ws parsed.result) ^ parsed.remainder
-  ))
+  (ensures (parser_soundness (infallible_to_fallible_parser parse_json_ws) render_json_ws s))
   (decreases (String.strlen s)) =
   match String.list_of_string s with
     | [] -> 
@@ -143,11 +172,7 @@ let rec parse_json_ws_soundness (s: string) :
 
 let rec parse_json_ws_completeness (ws: G.json_ws) :
   Lemma
-  (ensures (
-    let rendered_ws = G.render_json_ws ws in
-    let parsed = parse_json_ws rendered_ws in
-    ws == parsed.result /\ parsed.remainder == ""
-  )) =
+  (ensures (parser_completeness (infallible_to_fallible_parser parse_json_ws) render_json_ws ws)) =
   let rendered_ws = G.render_json_ws ws in
   let parsed = parse_json_ws rendered_ws in
   match ws with
@@ -180,3 +205,91 @@ let rec parse_json_ws_completeness (ws: G.json_ws) :
         ()
       )
   )
+
+let parse_json_sign (s: string) : Tot (parser_result G.json_sign) (decreases String.strlen s) = 
+  match String.list_of_string s with
+    | [] -> {
+      result = NoSign;
+      remainder = s
+    }
+    | c::tail -> 
+      let plusminus = (c = G.char_from_codepoint 0x2B) || (c = G.char_from_codepoint 0x2D) in
+      if plusminus then
+        {
+          result = PlusMinus c;
+          remainder = String.string_of_list tail
+        }
+      else
+        {
+        result = NoSign;
+        remainder = s
+        }
+
+// Prove correctness of json_sign parser
+let parse_json_sign_soundness (s: string) : 
+  Lemma
+  (ensures (parser_soundness (infallible_to_fallible_parser parse_json_sign) render_json_sign s)) =
+  match String.list_of_string s with
+    | [] -> prepend_empty_is_identity s
+    | c::tail -> 
+      let plusminus = (c = G.char_from_codepoint 0x2B) || (c = G.char_from_codepoint 0x2D) in
+      if plusminus then
+        str_decompose s [c] tail
+      else
+        prepend_empty_is_identity s
+
+let parse_json_sign_completeness (sign: json_sign) :
+  Lemma
+  (ensures (parser_completeness (infallible_to_fallible_parser parse_json_sign) render_json_sign sign)) =
+  let rendered_sign = render_json_sign sign in
+  let parsed = parse_json_sign rendered_sign in
+  match sign with
+  | G.NoSign -> list_of_string_eq rendered_sign ""
+  | G.PlusMinus c -> (
+    String.list_of_string_of_list [c];
+    str_decompose rendered_sign [c] [];
+    assert(parsed.result == PlusMinus c);
+    let c::tail = String.list_of_string rendered_sign in
+    assert(tail == []);
+    assert(parsed.remainder == String.string_of_list tail);
+    string_of_list_eq tail [];
+    assert(parsed.remainder == String.string_of_list []);
+    ()
+  )
+  
+let parse_json_onenine (s: string) : option (parser_result json_onenine) =
+  match String.list_of_string s with
+    | [] -> None
+    | c::tail -> 
+      let codepoint = U32.v (Char.u32_of_char c) in
+      let is_onenine = (0x31 <= codepoint && codepoint <= 0x39) in
+      if is_onenine then
+        Some ({ result = G.OneNine c; remainder = String.string_of_list tail})
+      else
+        None
+
+let parse_json_onenine_soundness (s: string) :
+  Lemma
+  (requires Some? (parse_json_onenine s))
+  (ensures (parser_soundness parse_json_onenine render_json_onenine s)) =
+  // The branch in the parser is obvious
+  let c::tail = String.list_of_string s in
+  str_decompose s [c] tail;
+  ()
+
+let parse_json_onenine_completeness (onenine: json_onenine) :
+  Lemma
+  (ensures (parser_completeness parse_json_onenine render_json_onenine onenine))
+  = 
+  let rendered_onenine = render_json_onenine onenine in
+  let parsed = parse_json_onenine rendered_onenine in
+  let OneNine c = onenine in
+  list_of_string_eq rendered_onenine (G.char_to_str c);
+  String.list_of_string_of_list [c];
+  assert(String.list_of_string rendered_onenine == [c]);
+  let c::tail = String.list_of_string rendered_onenine in
+  assert(Some? parsed);
+  assert(onenine = (Some?.v parsed).result);
+  string_of_list_eq tail [];
+  assert((Some?.v parsed).remainder == "")
+
