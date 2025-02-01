@@ -143,6 +143,11 @@ let prepend_empty_is_identity (s: string) : Lemma (ensures ("" ^ s) == s) =
     String.string_of_list_of_string ("" ^ s);
     String.string_of_list_of_string s
 
+let postpend_empty_is_identity (s: string) : Lemma (ensures (s ^ "") == s) =
+    list_of_concat s "";
+    String.string_of_list_of_string (s ^ "");
+    String.string_of_list_of_string s
+
 let rec parse_json_ws_soundness (s: string) :
   Lemma 
   (ensures (parser_soundness (infallible_to_fallible_parser parse_json_ws) render_json_ws s))
@@ -355,7 +360,7 @@ let parse_json_hex (s: string) : option (parser_result json_hex) =
 
 let parse_json_hex_soundness (s: string) :
   Lemma
-  (requires Some? (parse_json_digit s))
+  (requires Some? (parse_json_hex s))
   (ensures (parser_soundness parse_json_hex render_json_hex s)) 
   = 
   let c::tail = String.list_of_string s in
@@ -381,3 +386,161 @@ let parse_json_hex_completeness (hex: json_hex) :
       let c::tail = String.list_of_string rendered_hex in
       string_of_list_eq tail []
     )
+
+let parse_json_escape (s: string) : option (parser_result json_escape) = 
+  match String.list_of_string s with
+    | [] -> None
+    | c::tail -> 
+      let is_escape_char = G.char_from_codepoint 0x22 = c || // '"'
+                            G.char_from_codepoint 0x5C = c || // '\'
+                            G.char_from_codepoint 0x62 = c || // 'b' 
+                            G.char_from_codepoint 0x66 = c || // 'f'
+                            G.char_from_codepoint 0x6E = c || // 'n'
+                            G.char_from_codepoint 0x72 = c || // 'r'
+                            G.char_from_codepoint 0x74 = c    // 't'
+      in
+      if is_escape_char then
+        Some { result = Escape c; remainder = String.string_of_list tail }
+      else
+        // Attempt to parse as hex code
+        match String.list_of_string s with
+          | u::h1::h2::h3::h4::tail' -> 
+              let h1_parse = parse_json_hex (G.char_to_str h1) in
+              let h2_parse = parse_json_hex (G.char_to_str h2) in
+              let h3_parse = parse_json_hex (G.char_to_str h3) in
+              let h4_parse = parse_json_hex (G.char_to_str h4) in
+              if (G.char_from_codepoint 0x75 = u) && (Some? h1_parse) && (Some? h2_parse) && (Some? h3_parse) && (Some? h4_parse) then
+                Some {
+                  result = HexCode u (Some?.v h1_parse).result (Some?.v h2_parse).result (Some?.v h3_parse).result (Some?.v h4_parse).result;
+                  remainder = String.string_of_list tail'
+                }
+              else
+                None
+          | _ -> None
+
+let parse_json_escape_soundness (s: string) :
+  Lemma
+  (requires (Some? (parse_json_escape s)))
+  (ensures (parser_soundness parse_json_escape render_json_escape s)) 
+  =
+  let c::tail = String.list_of_string s in
+  // Handle the escape char
+  let is_escape_char = G.char_from_codepoint 0x22 = c || // '"'
+                      G.char_from_codepoint 0x5C = c || // '\'
+                      G.char_from_codepoint 0x62 = c || // 'b' 
+                      G.char_from_codepoint 0x66 = c || // 'f'
+                      G.char_from_codepoint 0x6E = c || // 'n'
+                      G.char_from_codepoint 0x72 = c || // 'r'
+                      G.char_from_codepoint 0x74 = c    // 't'
+  in
+  if is_escape_char then
+    str_decompose s [c] tail
+  else
+    match String.list_of_string s with
+      | u::h1::h2::h3::h4::tail' -> (
+        // Prove decomposition
+        assert(String.list_of_string s == ([u] @ [h1] @ [h2] @ [h3] @ [h4] @ tail'));
+        str_decompose s [u] ([h1] @ [h2] @ [h3] @ [h4] @ tail');
+        String.list_of_string_of_list ([h1] @ [h2] @ [h3] @ [h4] @ tail');
+        str_decompose (String.string_of_list ([h1] @ [h2] @ [h3] @ [h4] @ tail')) [h1] ([h2] @ [h3] @ [h4] @ tail');
+        String.list_of_string_of_list ([h2] @ [h3] @ [h4] @ tail');
+        str_decompose (String.string_of_list ([h2] @ [h3] @ [h4] @ tail')) [h2] ([h3] @ [h4] @ tail');
+        String.list_of_string_of_list ([h3] @ [h4] @ tail');
+        str_decompose (String.string_of_list ([h3] @ [h4] @ tail')) [h3] ([h4] @ tail');
+        String.list_of_string_of_list ([h4] @ tail');
+        str_decompose (String.string_of_list ([h4] @ tail')) [h4] (tail');
+        let u' = String.string_of_list [u] in
+        let h1' = String.string_of_list [h1] in
+        let h2' = String.string_of_list [h2] in
+        let h3' = String.string_of_list [h3] in
+        let h4' = String.string_of_list [h4] in
+        let tail'_s = String.string_of_list tail' in
+        assert(s == u' ^ h1' ^ h2' ^ h3' ^ h4' ^ tail'_s);
+        // Use associative property to get parentheses to match the soundness theorem 
+        str_concat_assoc h3' h4' tail'_s;
+        str_concat_assoc h2' (h3' ^ h4') tail'_s;
+        str_concat_assoc h1' (h2' ^ h3' ^ h4') tail'_s;
+        str_concat_assoc u' (h1' ^ h2' ^ h3' ^ h4') tail'_s;
+        assert(s == (u' ^ h1' ^ h2' ^ h3' ^ h4') ^ tail'_s);
+        // Helper lemma to prove that each hi' where i=1,2,3,4 is equal to the rendered hex parsed result.
+        let hex_parse_helper (h: char{Some? (parse_json_hex (G.char_to_str h))}) : Lemma (ensures (G.char_to_str h) == (render_json_hex (Some?.v (parse_json_hex (G.char_to_str h))).result)) =
+          (
+            parse_json_hex_soundness (G.char_to_str h);
+            postpend_empty_is_identity (G.char_to_str h);
+            list_of_string_of_list [h];
+            str_decompose (G.char_to_str h) [h] []
+          )
+        in
+        // Substitute hi' for i=1,2,3,4 in the decomposition to get soundness theorem
+        hex_parse_helper h1;
+        hex_parse_helper h2;
+        hex_parse_helper h3;
+        hex_parse_helper h4;
+        ()
+      )
+      | _ -> ()
+
+let parse_json_escape_completeness (escape: json_escape) :
+  Lemma
+  (ensures (parser_completeness parse_json_escape render_json_escape escape))
+  =
+  let rendered_escape = render_json_escape escape in
+  match escape with
+    | Escape c -> (
+      String.list_of_string_of_list [c];
+      str_decompose rendered_escape [c] [];
+      assert((Some?.v (parse_json_escape rendered_escape)).result == escape);
+      let c::tail = String.list_of_string rendered_escape in
+      string_of_list_eq tail [];
+      ()
+    )
+    | HexCode u h0 h1 h2 h3 -> (
+      let u' = String.string_of_list [u] in
+      // Helper lemma to prove that hex digits render into one character
+      let hex_is_char (h: json_hex) : Lemma (ensures(match String.list_of_string (render_json_hex h) with | c::[] -> true | _ -> false)) = 
+        match h with
+          | HexDigit (DigitZero zero) -> String.list_of_string_of_list [zero]
+          | HexDigit (DigitOneNine (OneNine c)) -> String.list_of_string_of_list [c]
+          | HexAF c -> String.list_of_string_of_list [c]
+      in
+      hex_is_char h0;
+      hex_is_char h1;
+      hex_is_char h2;
+      hex_is_char h3;
+      let h0_s = render_json_hex h0 in
+      let h1_s = render_json_hex h1 in
+      let h2_s = render_json_hex h2 in
+      let h3_s = render_json_hex h3 in
+      let h0'::[] = String.list_of_string h0_s in
+      let h1'::[] = String.list_of_string h1_s in
+      let h2'::[] = String.list_of_string h2_s in
+      let h3'::[] = String.list_of_string h3_s in
+      String.list_of_string_of_list [u];
+      String.list_of_string_of_list [h0'];
+      String.list_of_string_of_list [h1'];
+      String.list_of_string_of_list [h2'];
+      String.list_of_string_of_list [h3'];
+      assert (rendered_escape == u' ^ h0_s ^ h1_s ^ h2_s ^ h3_s);
+      String.list_of_concat u' (h0_s ^ h1_s ^ h2_s ^ h3_s);
+      String.list_of_concat h0_s (h1_s ^ h2_s ^ h3_s);
+      String.list_of_concat h1_s (h2_s ^ h3_s);
+      String.list_of_concat h2_s h3_s;
+      // Successfully decomposed the rendered escape value into sequence of characters
+      assert(String.list_of_string rendered_escape == [u] @ [h0'] @ [h1'] @ [h2'] @ [h3']);
+      let u::h0'::h1'::h2'::h3'::tail = String.list_of_string rendered_escape in
+      // Prove that all sub hex parses succeed and recover h0,h1,h2,h3
+      String.string_of_list_of_string h0_s;
+      String.string_of_list_of_string h1_s;
+      String.string_of_list_of_string h2_s;
+      String.string_of_list_of_string h3_s;
+      assert((G.char_to_str h0') == render_json_hex h0);
+      assert((G.char_to_str h1') == render_json_hex h1);
+      assert((G.char_to_str h2') == render_json_hex h2);
+      assert((G.char_to_str h3') == render_json_hex h3);
+      // We now proved that input to hex parser effectively from a hex production rule allowing us to use completeness
+      parse_json_hex_completeness h0;
+      parse_json_hex_completeness h1;
+      parse_json_hex_completeness h2;
+      parse_json_hex_completeness h3
+    )
+
