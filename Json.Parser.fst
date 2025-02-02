@@ -50,6 +50,32 @@ let parser_completeness
   let parsed = parser rendered_rule in
   (Some? parsed) /\ (Some?.v parsed).result == rule /\ (Some?.v parsed).remainder == ""
 
+// Let S and S' be strings where S is a prefix of S'. That is S' = S + suffix for some suffix string.
+// We say a parser is monotonic if the parser's result for S' is "larger" than S, for all such S and S'.
+// A parser result R' is "larger" than another result R iff R is None or the length of the rendered
+// parse tree for R' is at least the length of the rendered parse tree for R.
+//
+// Notice that monotonicity implies that extending a parseable string should never cause the parser to
+// reject the extension.
+let parser_monotonic
+  (#production_rule: Type) 
+  (parser: string -> option (parser_result production_rule))
+  (renderer: production_rule -> string)
+  (prefix suffix: string)
+  =
+  let parsed_prefix = parser prefix in
+  let combined = prefix ^ suffix in
+  let parsed = parser combined in
+  match parsed_prefix with
+    | Some res_prefix -> (
+      match parsed with
+        | Some res_combined -> String.strlen (renderer res_prefix.result) <= String.strlen (renderer res_combined.result)
+        | None -> false
+    )
+    | None -> true
+
+
+
 // Helper function to convert infallible parsers into a "fallible" parser
 let infallible_to_fallible_parser (#production_rule: Type) (parser: string -> parser_result production_rule) = 
   fun (s:string) -> Some (parser s)
@@ -210,6 +236,8 @@ let rec parse_json_ws_completeness (ws: G.json_ws) :
         ()
       )
   )
+
+
 
 let parse_json_sign (s: string) : Tot (parser_result G.json_sign) (decreases String.strlen s) = 
   match String.list_of_string s with
@@ -640,3 +668,158 @@ let rec parse_json_digits_completeness (digits: json_digits) :
       ()
     )
 
+let parse_json_fraction (s: string) : parser_result json_fraction =
+  match String.list_of_string s with
+    | [] -> { result=NoFraction; remainder = s }
+    | c::tail -> 
+      if G.char_from_codepoint 0x2E = c then // '.'
+        match parse_json_digits (String.string_of_list tail) with
+          | Some parsed_digits -> { result = Fraction c parsed_digits.result; remainder = parsed_digits.remainder}
+          | None -> { result=NoFraction; remainder = s }
+      else
+        { result=NoFraction; remainder = s }
+
+let parse_json_fraction_soundness (s: string) :
+  Lemma
+  (ensures (parser_soundness (infallible_to_fallible_parser parse_json_fraction) render_json_fraction s))
+  =
+  match String.list_of_string s with
+    | [] -> prepend_empty_is_identity s
+    | c::tail -> 
+      if G.char_from_codepoint 0x2E = c then // '.'
+      (
+        str_decompose s [c] tail;
+        match parse_json_digits (String.string_of_list tail) with
+          | Some parsed_digits -> (
+            parse_json_digits_soundness (String.string_of_list tail);
+            str_concat_assoc (String.string_of_list [c]) (render_json_digits parsed_digits.result) parsed_digits.remainder;
+            ()
+          )
+          | None -> prepend_empty_is_identity s
+      )
+      else
+        prepend_empty_is_identity s
+
+let parse_json_fraction_completeness (fraction: json_fraction) :
+  Lemma
+  (ensures (parser_completeness (infallible_to_fallible_parser parse_json_fraction) render_json_fraction fraction))
+  =
+  let rendered_fraction = render_json_fraction fraction in
+  match fraction with
+    | NoFraction -> list_of_string_eq rendered_fraction ""
+    | Fraction c digits -> (
+      // rendered_fraction = (G.char_to_str c) + (rendered_json_digits digits)
+      String.list_of_concat (G.char_to_str c) (render_json_digits digits);
+      String.list_of_string_of_list [c];
+      let c::tail = String.list_of_string rendered_fraction in
+      str_decompose rendered_fraction [c] tail;
+      String.concat_injective (G.char_to_str c) (G.char_to_str c) (render_json_digits digits) (String.string_of_list tail);
+      assert (render_json_digits digits == String.string_of_list tail);
+      parse_json_digits_completeness digits;
+      ()
+    )
+
+let parse_json_exponent (s: string) : parser_result json_exponent =
+  match String.list_of_string s with
+    | [] -> { result=NoExponent; remainder=s }
+    | c::tail -> 
+      if (char_from_codepoint 0x65 = c) || (char_from_codepoint 0x45 = c) then
+        let parsed_json_sign = parse_json_sign (String.string_of_list tail) in
+        match parse_json_digits (parsed_json_sign.remainder) with
+          | Some parsed_digits -> {
+            result = Exponent c parsed_json_sign.result parsed_digits.result;
+            remainder = parsed_digits.remainder
+          }
+          | None -> { result=NoExponent; remainder=s }
+      else
+        { result=NoExponent; remainder=s }
+
+let parse_json_exponent_soundness (s: string) :
+  Lemma
+  (ensures parser_soundness (infallible_to_fallible_parser parse_json_exponent) render_json_exponent s)
+  =
+  match String.list_of_string s with
+    | [] -> prepend_empty_is_identity s
+    | c::tail -> 
+      str_decompose s [c] tail;
+      if (char_from_codepoint 0x65 = c) || (char_from_codepoint 0x45 = c) then
+        let parsed_json_sign = parse_json_sign (String.string_of_list tail) in
+        parse_json_sign_soundness (String.string_of_list tail);
+        match parse_json_digits (parsed_json_sign.remainder) with
+          | Some parsed_digits -> (
+            parse_json_digits_soundness (parsed_json_sign.remainder);
+            assert(s == (G.char_to_str c) ^ ((render_json_sign parsed_json_sign.result) ^ ((render_json_digits parsed_digits.result) ^ parsed_digits.remainder)));
+            str_concat_assoc (render_json_sign parsed_json_sign.result) (render_json_digits parsed_digits.result) parsed_digits.remainder;
+            str_concat_assoc (G.char_to_str c) ((render_json_sign parsed_json_sign.result) ^ (render_json_digits parsed_digits.result)) parsed_digits.remainder;
+            ()
+          )
+          | None -> prepend_empty_is_identity s
+      else
+        prepend_empty_is_identity s
+
+// Utility helper lemma showing that the first character of a string produced by json_digits starts for 0,1,2,...,9
+let digits_start_character (digits: json_digits) :
+  Lemma
+  (ensures (
+    let rendered_digits = render_json_digits digits in
+    match String.list_of_string rendered_digits with
+      | [] -> false
+      | c::tail -> 
+        let codepoint = U32.v (Char.u32_of_char c) in
+        (0x30 <= codepoint /\ codepoint <= 0x39) // '0'-'9'
+  ))
+  =
+  match digits with
+    | DigitsSingle (DigitZero d) -> String.list_of_string_of_list [d]
+    | DigitsSingle (DigitOneNine (OneNine d)) -> String.list_of_string_of_list [d]
+    | Digits (DigitZero d) digits' -> (
+      String.list_of_string_of_list [d];
+      String.list_of_concat (G.char_to_str d) (render_json_digits digits')
+    )
+    | Digits (DigitOneNine (OneNine d)) digits' -> (
+      String.list_of_string_of_list [d];
+      String.list_of_concat (G.char_to_str d) (render_json_digits digits')
+    )
+
+let parse_json_exponent_completeness (exponent: json_exponent) :
+  Lemma
+  (ensures parser_completeness (infallible_to_fallible_parser parse_json_exponent) render_json_exponent exponent)
+  =
+  let rendered_exponent = render_json_exponent exponent in
+  match exponent with
+    | NoExponent -> list_of_string_eq rendered_exponent ""
+    | Exponent c sign digits ->
+      let rendered_sign = render_json_sign sign in
+      let rendered_digits = render_json_digits digits in
+      // rendered_exponent = (G.char_to_str c) + rendered_sign + rendered_digits
+      String.list_of_concat (G.char_to_str c) (rendered_sign ^ rendered_digits);
+      String.list_of_concat rendered_sign rendered_digits;
+      list_of_string_of_list [c];
+      let c::tail = String.list_of_string rendered_exponent in
+      str_decompose rendered_exponent [c] tail;
+      // string_of_list tail = rendered_sign + rendered_digits
+      String.concat_injective (G.char_to_str c) (G.char_to_str c) (String.string_of_list tail) (rendered_sign ^ rendered_digits);
+      String.list_of_string_of_list tail;
+      match sign with
+        | NoSign -> (
+          // rendered_sign = ""
+          prepend_empty_is_identity rendered_digits;
+          assert(String.string_of_list tail == rendered_digits);
+          // Prove that rendered_digits start with a character '0' to '9' making the sign parser yield NoSign
+          digits_start_character digits;
+          assert((parse_json_sign rendered_digits).result == NoSign);
+          assert((parse_json_sign rendered_digits).remainder == rendered_digits);
+          parse_json_digits_completeness digits;
+          ()
+        )
+        | PlusMinus pm -> (
+          String.list_of_string_of_list [pm];
+          str_decompose (String.string_of_list tail) [pm] (String.list_of_string rendered_digits);
+          let pm::tail' = tail in
+          parse_json_sign_soundness (String.string_of_list tail);
+          assert((parse_json_sign (String.string_of_list tail)).result == PlusMinus pm);
+          assert((parse_json_sign (String.string_of_list tail)).remainder == String.string_of_list tail');
+          String.concat_injective (G.char_to_str pm) (G.char_to_str pm) (parse_json_sign (String.string_of_list tail)).remainder rendered_digits;
+          parse_json_digits_completeness digits;
+          ()
+        )
