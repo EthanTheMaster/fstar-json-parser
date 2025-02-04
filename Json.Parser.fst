@@ -823,3 +823,128 @@ let parse_json_exponent_completeness (exponent: json_exponent) :
           parse_json_digits_completeness digits;
           ()
         )
+
+let parse_json_integer (s: string) : option (parser_result json_integer) =
+  match String.list_of_string s with
+    | [] -> None
+    | c::tail -> if char_from_codepoint 0x2D = c then
+      // Negative branch
+      match parse_json_digit (String.string_of_list tail) with
+        | Some ({ result=DigitZero d; remainder=remainder }) -> Some { result=IntNegDigit c (DigitZero d); remainder=remainder }
+        | Some ({ result=DigitOneNine (OneNine d); remainder=remainder }) -> (
+            match parse_json_digits remainder with
+              | Some { result=digits; remainder=remainder } -> Some { result=IntNegDigits c (OneNine d) digits; remainder=remainder }
+              | None -> Some { result=IntNegDigit c (DigitOneNine (OneNine d)); remainder=remainder }
+        )
+        | None -> None
+    else
+      // Non-negative branch
+      match parse_json_digit s with
+        | Some ({ result=DigitZero d; remainder=remainder }) -> Some { result=IntDigit (DigitZero d); remainder=remainder }
+        | Some ({ result=DigitOneNine (OneNine d); remainder=remainder }) -> (
+            match parse_json_digits remainder with
+              | Some { result=digits; remainder=remainder } -> Some { result=IntDigits (OneNine d) digits; remainder=remainder }
+              | None -> Some { result=IntDigit (DigitOneNine (OneNine d)); remainder=remainder }
+        )
+        | None -> None
+
+let parse_json_integer_soundness (s: string) :
+  Lemma
+  (requires (Some? (parse_json_integer s)))
+  (ensures (parser_soundness parse_json_integer render_json_integer s))
+  =
+  let c::tail = String.list_of_string s in
+  if char_from_codepoint 0x2D = c then
+  (
+    str_decompose s [c] tail;
+    parse_json_digit_soundness (String.string_of_list tail);
+    match parse_json_digit (String.string_of_list tail) with
+      | Some ({ result=DigitZero d; remainder=remainder }) -> str_concat_assoc (G.char_to_str c) (G.char_to_str d) remainder
+      | Some ({ result=DigitOneNine (OneNine d); remainder=remainder }) -> (
+        match parse_json_digits remainder with
+          | Some { result=digits; remainder=remainder' } -> (
+            parse_json_digits_soundness remainder;
+            str_concat_assoc (G.char_to_str d) (render_json_digits digits) remainder';
+            str_concat_assoc (G.char_to_str c) (G.char_to_str d ^ render_json_digits digits) remainder';
+            ()
+          )
+          | None -> str_concat_assoc (G.char_to_str c) (G.char_to_str d) remainder
+      )
+  )
+  else
+    parse_json_digit_soundness s;
+    match parse_json_digit s with
+      | Some ({ result=DigitZero d; remainder=remainder }) -> ()
+      | Some ({ result=DigitOneNine (OneNine d); remainder=remainder }) -> admit(
+          match parse_json_digits remainder with
+            | Some { result=digits; remainder=remainder' } -> (
+              parse_json_digits_soundness remainder;
+              str_concat_assoc (G.char_to_str d) (render_json_digits digits) remainder';
+              ()
+            )
+            | None -> ()
+      )
+      | None -> ()
+
+let parse_json_integer_completeness (integer: json_integer) :
+  Lemma
+  (ensures parser_completeness parse_json_integer render_json_integer integer)
+  =
+  let rendered_integer = render_json_integer integer in
+  match integer with
+    | IntDigit (DigitZero c) -> (
+      list_of_string_of_list [c];
+      parse_json_digit_completeness (DigitZero c);
+      ()
+    )
+    | IntDigit (DigitOneNine (OneNine c)) -> (
+      list_of_string_of_list [c];
+      parse_json_digit_completeness (DigitOneNine (OneNine c));
+      let Some { result=DigitOneNine (OneNine c); remainder = remainder } = parse_json_digit rendered_integer in
+      list_of_string_eq remainder "";
+      ()
+    )
+    | IntDigits (OneNine c) digits -> (
+      String.list_of_concat (render_json_onenine (OneNine c)) (render_json_digits digits);
+      String.list_of_string_of_list [c];
+      let c::tail = String.list_of_string rendered_integer in
+      let Some {result=DigitOneNine (OneNine c); remainder=remainder} = parse_json_digit rendered_integer in
+      parse_json_digit_soundness rendered_integer;
+      // Use the two decompositions of rendered_integers and prove equivalence
+      String.concat_injective (G.char_to_str c) (G.char_to_str c) remainder (render_json_digits digits);
+      parse_json_digits_completeness digits;
+      ()
+    )
+    | IntNegDigit minus (DigitZero c) -> (
+      String.list_of_concat (G.char_to_str minus) (G.char_to_str c);
+      String.list_of_string_of_list [minus];
+      String.list_of_string_of_list [c];
+      parse_json_digit_completeness (DigitZero c);
+      ()
+    )
+    | IntNegDigit minus (DigitOneNine (OneNine c)) -> (
+      String.list_of_concat (G.char_to_str minus) (G.char_to_str c);
+      String.list_of_string_of_list [minus];
+      String.list_of_string_of_list [c];
+      parse_json_digit_completeness (DigitOneNine (OneNine c));
+      let minus::[c] = String.list_of_string rendered_integer in
+      let Some { result=DigitOneNine (OneNine c); remainder = remainder } = parse_json_digit (String.string_of_list [c]) in
+      list_of_string_eq remainder "";
+      ()
+    )
+    | IntNegDigits minus (OneNine c) digits -> (
+      String.list_of_concat (G.char_to_str minus) ((render_json_onenine (OneNine c)) ^ (render_json_digits digits));
+      String.list_of_string_of_list [minus];
+      String.list_of_string_of_list [c];
+      let c'::tail = String.list_of_string rendered_integer in
+      str_decompose rendered_integer [c'] tail;
+      // Decompose and get back to the usual IntDigits case and replay that proof
+      String.concat_injective (G.char_to_str minus) (G.char_to_str minus) (String.string_of_list tail) ((render_json_onenine (OneNine c)) ^ (render_json_digits digits));
+      String.list_of_concat (render_json_onenine (OneNine c)) (render_json_digits digits);
+      let c::tail' = tail  in
+      let Some {result=DigitOneNine (OneNine c); remainder=remainder} = parse_json_digit (String.string_of_list tail) in
+      parse_json_digit_soundness (String.string_of_list tail);
+      String.concat_injective (G.char_to_str c) (G.char_to_str c) remainder (render_json_digits digits);
+      parse_json_digits_completeness digits;
+      ()
+    )
