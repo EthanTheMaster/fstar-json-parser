@@ -875,7 +875,7 @@ let parse_json_integer_soundness (s: string) :
     parse_json_digit_soundness s;
     match parse_json_digit s with
       | Some ({ result=DigitZero d; remainder=remainder }) -> ()
-      | Some ({ result=DigitOneNine (OneNine d); remainder=remainder }) -> admit(
+      | Some ({ result=DigitOneNine (OneNine d); remainder=remainder }) -> (
           match parse_json_digits remainder with
             | Some { result=digits; remainder=remainder' } -> (
               parse_json_digits_soundness remainder;
