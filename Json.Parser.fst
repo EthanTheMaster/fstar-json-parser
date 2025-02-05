@@ -1160,8 +1160,77 @@ let parse_json_exponent_termination (s1 s2: string) :
         ()
     )
 
-let parse_json_number_completeness (integer: json_integer) :
+let json_fraction_empty_or_period (fraction: json_fraction) : 
   Lemma
-  (ensures parser_completeness parse_json_integer render_json_integer integer)
+  (ensures (
+    let rendered_fraction = render_json_fraction fraction in
+    match String.list_of_string rendered_fraction with
+      | [] -> true
+      | c::_ -> c = G.char_from_codepoint 0x2E
+  ))
   =
-  admit()
+  match fraction with
+    | NoFraction ->  list_of_string_eq "" (render_json_fraction fraction)
+    | Fraction c digits -> (
+        String.list_of_concat (G.char_to_str c) (render_json_digits digits);
+        String.list_of_string_of_list [c]
+    )
+
+let json_exponent_empty_or_e (exponent: json_exponent) : 
+  Lemma
+  (ensures (
+    let rendered_exponent = render_json_exponent exponent in
+    match String.list_of_string rendered_exponent with
+      | [] -> true
+      | c::_ -> (c = G.char_from_codepoint 0x65) \/ (c = G.char_from_codepoint 0x45)
+  ))
+  =
+  match exponent with
+    | NoExponent -> list_of_string_eq "" (render_json_exponent exponent)
+    | Exponent c sign digits -> (
+      str_concat_assoc (G.char_to_str c) (render_json_sign sign) (render_json_digits digits);
+      String.list_of_concat (G.char_to_str c) ((render_json_sign sign) ^ (render_json_digits digits));
+      String.list_of_string_of_list [c]
+    )
+
+let parse_json_number_completeness (number: json_number) :
+  Lemma
+  (ensures parser_completeness parse_json_number render_json_number number)
+  =
+  let rendered_number = render_json_number number in
+  let Number integer fraction exponent = number in
+  let rendered_integer = render_json_integer integer in
+  let rendered_fraction = render_json_fraction fraction in
+  let rendered_exponent = render_json_exponent exponent in
+  json_fraction_empty_or_period fraction;
+  json_exponent_empty_or_e exponent;
+  // rendered_number = rendered_integer + (rendered_fraction + rendered_exponent)
+  str_concat_assoc rendered_integer rendered_fraction rendered_exponent;
+
+  // Handle phase 1 of parsing the integer part
+  parse_json_integer_termination (rendered_integer ^ rendered_fraction) rendered_exponent;
+  parse_json_integer_termination rendered_integer rendered_fraction;
+  parse_json_integer_completeness integer;
+  parse_json_integer_soundness rendered_number;
+  let Some {result=integer'; remainder=remainder} = parse_json_integer rendered_number in
+  assert(integer == integer');
+  String.concat_length rendered_integer (rendered_fraction ^ rendered_exponent);
+  String.concat_length (render_json_integer integer') remainder;
+  assert(String.strlen rendered_integer == String.strlen (render_json_integer integer'));
+  assert(String.strlen (rendered_fraction ^ rendered_exponent) == String.strlen remainder);
+  String.concat_injective rendered_integer (render_json_integer integer') (rendered_fraction ^ rendered_exponent) remainder;
+  assert(remainder == rendered_fraction ^ rendered_exponent);
+
+  // Handle phase 2 of parsing the fraction part
+  parse_json_fraction_termination rendered_fraction rendered_exponent;
+  parse_json_fraction_completeness fraction;
+  parse_json_fraction_soundness remainder;
+  let {result=fraction'; remainder=remainder} = parse_json_fraction remainder in
+  assert(fraction == fraction');
+  String.concat_length rendered_fraction rendered_exponent;
+  String.concat_length (render_json_fraction fraction') remainder;
+  String.concat_injective rendered_fraction (render_json_fraction fraction') rendered_exponent remainder;
+  assert(remainder == rendered_exponent);
+
+  // Handle phase 3 of parsing the exponent part
+  parse_json_exponent_completeness exponent
