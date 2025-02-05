@@ -50,31 +50,6 @@ let parser_completeness
   let parsed = parser rendered_rule in
   (Some? parsed) /\ (Some?.v parsed).result == rule /\ (Some?.v parsed).remainder == ""
 
-// Let S and S' be strings where S is a prefix of S'. That is S' = S + suffix for some suffix string.
-// We say a parser is monotonic if the parser's result for S' is "larger" than S, for all such S and S'.
-// A parser result R' is "larger" than another result R iff R is None or the length of the rendered
-// parse tree for R' is at least the length of the rendered parse tree for R.
-//
-// Notice that monotonicity implies that extending a parseable string should never cause the parser to
-// reject the extension.
-let parser_monotonic
-  (#production_rule: Type) 
-  (parser: string -> option (parser_result production_rule))
-  (renderer: production_rule -> string)
-  (prefix suffix: string)
-  =
-  let parsed_prefix = parser prefix in
-  let combined = prefix ^ suffix in
-  let parsed = parser combined in
-  match parsed_prefix with
-    | Some res_prefix -> (
-      match parsed with
-        | Some res_combined -> String.strlen (renderer res_prefix.result) <= String.strlen (renderer res_combined.result)
-        | None -> false
-    )
-    | None -> true
-
-
 
 // Helper function to convert infallible parsers into a "fallible" parser
 let infallible_to_fallible_parser (#production_rule: Type) (parser: string -> parser_result production_rule) = 
@@ -948,3 +923,245 @@ let parse_json_integer_completeness (integer: json_integer) :
       parse_json_digits_completeness digits;
       ()
     )
+
+let parse_json_number (s: string) : option (parser_result json_number) = 
+  match parse_json_integer s with
+    | Some { result=integer; remainder=remainder } -> (
+      let { result=fraction; remainder=remainder } = parse_json_fraction remainder in
+      let { result=exponent; remainder=remainder } = parse_json_exponent remainder in
+      Some {
+        result = Number integer fraction exponent;
+        remainder = remainder
+      }
+    )
+    | None -> None
+
+let parse_json_number_soundness (s: string) :
+  Lemma
+  (requires (Some? (parse_json_number s)))
+  (ensures (parser_soundness parse_json_number render_json_number s))
+  =
+  parse_json_integer_soundness s;
+  let Some { result=integer; remainder=remainder } = parse_json_integer s in
+  parse_json_fraction_soundness remainder;
+  let { result=fraction; remainder=remainder' } = parse_json_fraction remainder in
+  parse_json_exponent_soundness remainder';
+  let { result=exponent; remainder=remainder'' } = parse_json_exponent remainder' in
+  str_concat_assoc (render_json_fraction fraction) (render_json_exponent exponent) remainder'';
+  str_concat_assoc (render_json_integer integer) ((render_json_fraction fraction) ^ (render_json_exponent exponent)) remainder'';
+  ()
+
+// Helper lemmas to build up to completeness of parse_json_number
+
+let is_digit_char (c: char) = 
+  let codepoint = U32.v (Char.u32_of_char c) in
+  (0x30 <= codepoint && codepoint <= 0x39) // '0' to '9'
+
+let matching_parse_result #production_rule (s1 s2: string) (parser: string -> option (parser_result production_rule)) = 
+  let parse1 = parser s1 in
+  let parse2 = parser s2 in
+  match parse1 with
+    | None -> parse1 == parse2
+    | Some { result=result; remainder=_ } -> (Some? parse2) /\ (Some?.v parse2).result == result
+
+let that_first_char_of (s: string) (cond: char -> bool) = 
+  match String.list_of_string s with
+    | [] -> true
+    | c::_ -> cond c
+
+// Let s1 and s2 be two strings such that s2 does not begin with a digit character.
+// This lemma asserts that parsing s1 with "parse_json_digits" will yield the same
+// result of parsing s1^s2, ignoring the remainder. By soundness, this implies 
+// parsing s1 and s1^s2 "terminate at the same place".
+let rec parse_json_digits_termination (s1 s2: string) :
+  Lemma
+  (requires that_first_char_of s2 (fun c -> not (is_digit_char c)))
+  (ensures matching_parse_result s1 (s1 ^ s2) parse_json_digits)
+  (decreases String.strlen s1)
+  =
+  match String.list_of_string s1 with
+    | [] -> (
+      assert(None? (parse_json_digits s1));
+      string_of_list_eq [] (String.list_of_string s1);
+      string_of_list_of_string s1;
+      assert(s1 == "");
+      prepend_empty_is_identity s2;
+      // By assumption of s2 not starting with digit char by case analysis of s2 we are done
+      ()
+    )
+    | c::tail -> (
+      // Perform the following decomposition: 
+      //    s1 = c + tail
+      str_decompose s1 [c] tail;
+      String.list_of_string_of_list [c];
+      //    s1+s2 = c + (tail + s2)
+      str_concat_assoc (G.char_to_str c) (String.string_of_list tail) s2;
+      String.list_of_concat (G.char_to_str c) ((String.string_of_list tail) ^ s2);
+      String.string_of_list_of_string ((String.string_of_list tail) ^ s2);
+
+      // Then use induction to prove that parsing tail and tail+s2 gives the same result
+      if is_digit_char c then (
+        let Some { result=digit_original; remainder=remainder_original } = parse_json_digit s1 in
+        let Some { result=digit_concat; remainder=remainder_concat } = parse_json_digit (s1^s2) in
+        assert(digit_original == digit_concat);
+        assert(remainder_original == String.string_of_list tail);
+        assert(remainder_concat == ((String.string_of_list tail) ^ s2));
+        // We now have the pieces in place to invoke the induction hypothesis to complete the proof
+        str_tail_decrease s1; // used to prove recursive termination
+        parse_json_digits_termination (String.string_of_list tail) s2;
+        ()
+      )
+      else (
+        assert(None? (parse_json_digits s1));
+        assert(None? (parse_json_digits (s1^s2)));
+        ()
+      )
+    )
+
+// Similar to parse_json_digits_termination
+let parse_json_integer_termination (s1 s2: string) :
+  Lemma
+  (requires that_first_char_of s2 (fun c -> not (is_digit_char c) && not (c = G.char_from_codepoint 0x2D))) // First character of s2cannot be digit or negative sign
+  (ensures matching_parse_result s1 (s1 ^ s2) parse_json_integer)
+  =
+  match String.list_of_string s1 with
+    | [] -> (
+      assert(None? (parse_json_digits s1));
+      string_of_list_eq [] (String.list_of_string s1);
+      string_of_list_of_string s1;
+      assert(s1 == "");
+      prepend_empty_is_identity s2;
+      ()
+    )
+    | c::tail -> (
+      // Perform the following decomposition: 
+      //    s1 = c + tail
+      str_decompose s1 [c] tail;
+      String.list_of_string_of_list [c];
+      //    s1+s2 = c + (tail + s2)
+      str_concat_assoc (G.char_to_str c) (String.string_of_list tail) s2;
+      String.list_of_concat (G.char_to_str c) ((String.string_of_list tail) ^ s2);
+      String.string_of_list_of_string ((String.string_of_list tail) ^ s2);
+      // Decompose tail+s2 to assist FStar in analyzing the "tail" of the concatenated string
+      String.list_of_concat (String.string_of_list tail) s2;
+      String.list_of_string_of_list tail;
+
+      if char_from_codepoint 0x2D = c then
+        // Negative branch
+        match parse_json_digit (String.string_of_list tail) with
+          | Some ({ result=DigitZero d; remainder=remainder }) -> ()
+          | Some ({ result=DigitOneNine (OneNine d); remainder=remainder }) -> (
+              // s = c + tail = c + d + remainder
+              // s1+s2 = c + d + remainder + s2
+              // Inspect proof state
+              let Some ({ result=DigitOneNine (OneNine d_concat); remainder=remainder_concat }) = parse_json_digit ((String.string_of_list tail)^s2) in
+              assert(d == d_concat);
+              parse_json_digit_soundness (String.string_of_list tail);
+              parse_json_digit_soundness ((String.string_of_list tail) ^ s2);
+              str_concat_assoc (G.char_to_str d) remainder s2;
+              String.concat_injective (G.char_to_str d) (G.char_to_str d_concat) (remainder^s2) remainder_concat;
+              assert(remainder^s2 == remainder_concat);
+
+              // Finally! We can use the termination property of parse_json_digits
+              parse_json_digits_termination remainder s2
+          )
+          | None -> ()
+      else
+        // Non-negative branch
+        parse_json_digits_termination s1 s2
+    )
+
+// Similar to parse_json_digits_termination
+let parse_json_fraction_termination (s1 s2: string) :
+  Lemma
+  (requires that_first_char_of s2 (fun c -> not (is_digit_char c) && not (c = G.char_from_codepoint 0x2E))) // First character of s2 cannot be digit or period
+  (ensures matching_parse_result s1 (s1 ^ s2) (infallible_to_fallible_parser parse_json_fraction))
+  =
+  match String.list_of_string s1 with 
+    | [] -> (
+      assert(None? (parse_json_digits s1));
+      string_of_list_eq [] (String.list_of_string s1);
+      string_of_list_of_string s1;
+      assert(s1 == "");
+      prepend_empty_is_identity s2
+    )
+    | c::tail -> (
+      // Perform the following decomposition: 
+      //    s1 = c + tail
+      str_decompose s1 [c] tail;
+      String.list_of_string_of_list [c];
+      //    s1+s2 = c + (tail + s2)
+      str_concat_assoc (G.char_to_str c) (String.string_of_list tail) s2;
+      String.list_of_concat (G.char_to_str c) ((String.string_of_list tail) ^ s2);
+      String.string_of_list_of_string ((String.string_of_list tail) ^ s2);
+      parse_json_digits_termination (String.string_of_list tail) s2
+    )
+
+// Similar to parse_json_digits_termination
+let parse_json_exponent_termination (s1 s2: string) :
+  Lemma
+  (requires that_first_char_of s2 (
+    // First character of s2 cannot be digit or 'e'/'E' or '+'/'-'
+    fun c -> 
+      not (is_digit_char c) && 
+      not (c = G.char_from_codepoint 0x65) && 
+      not (c = G.char_from_codepoint 0x45) &&
+      not (c = G.char_from_codepoint 0x2B) &&
+      not (c = G.char_from_codepoint 0x2D)
+  ))
+  (ensures matching_parse_result s1 (s1 ^ s2) (infallible_to_fallible_parser parse_json_exponent))
+  =
+  match String.list_of_string s1 with 
+    | [] -> (
+      assert(None? (parse_json_digits s1));
+      string_of_list_eq [] (String.list_of_string s1);
+      string_of_list_of_string s1;
+      assert(s1 == "");
+      prepend_empty_is_identity s2
+    )
+    | c::tail -> (
+      // Perform the following decomposition: 
+      //    s1 = c + tail
+      str_decompose s1 [c] tail;
+      String.list_of_string_of_list [c];
+      //    s1+s2 = c + (tail + s2)
+      str_concat_assoc (G.char_to_str c) (String.string_of_list tail) s2;
+      String.list_of_concat (G.char_to_str c) ((String.string_of_list tail) ^ s2);
+      String.string_of_list_of_string ((String.string_of_list tail) ^ s2);
+
+      if (char_from_codepoint 0x65 = c) || (char_from_codepoint 0x45 = c) then
+        let {result=sign1; remainder=remainder1} = parse_json_sign (String.string_of_list tail) in
+        let {result=sign2; remainder=remainder2} = parse_json_sign ((String.string_of_list tail) ^ s2) in
+        (
+        String.list_of_string_of_list tail;
+        match tail with
+          | [] -> (
+            string_of_list_eq tail [];
+            prepend_empty_is_identity s2;
+            assert(sign1 == sign2)
+          )
+          | c'::tail' ->
+            // Decompose tail + s2 = c' + tail' + s2 to prove that tail + s2 starts with c'
+            // leading to same sign parsing
+            str_decompose (String.string_of_list tail) [c'] tail';
+            str_concat_assoc (G.char_to_str c') (String.string_of_list tail') s2;
+            String.list_of_string_of_list [c'];
+            String.list_of_concat (G.char_to_str c') ((String.string_of_list tail') ^ s2);
+            assert(sign1 == sign2)
+        );
+        assert(sign1 == sign2);
+        // sign1 + remainder1 + s2 = tail + s2 = sign2 + remainder
+        parse_json_sign_soundness (String.string_of_list tail);
+        parse_json_sign_soundness ((String.string_of_list tail) ^ s2);
+        String.concat_injective (render_json_sign sign1) (render_json_sign sign2) (remainder1 ^ s2) remainder2;
+        assert (remainder2 == remainder1 ^ s2);
+        parse_json_digits_termination remainder1 s2
+      else
+        ()
+    )
+
+let parse_json_number_completeness (integer: json_integer) :
+  Lemma
+  (ensures parser_completeness parse_json_integer render_json_integer integer)
+  =
+  admit()
