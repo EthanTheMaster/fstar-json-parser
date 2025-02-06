@@ -1539,3 +1539,62 @@ let rec parse_json_characters_termination (characters: json_characters) (s: stri
       // Having got both rendered_characters and rendered_characters ^ s into a decomposed state, invoke the induction hypothesis
       parse_json_characters_termination characters' s
     )
+
+let parse_json_string (s: string) : option (parser_result json_string) =
+  match String.list_of_string s with
+    | [] -> None
+    | c::tail -> 
+        if c = G.char_from_codepoint 0x22 then // '"'
+          let { result=parsed_characters; remainder=remainder_characters } = parse_json_characters (String.string_of_list tail) in
+          match String.list_of_string remainder_characters with 
+            | [] -> None
+            | c'::tail' -> 
+              if c' = G.char_from_codepoint 0x22 then // '"'
+                Some { result = String c parsed_characters c'; remainder = String.string_of_list tail' }
+              else
+                None
+        else
+          None
+
+let parse_json_string_soundness (s: string) :
+  Lemma
+  (requires (Some? (parse_json_string s)))
+  (ensures (parser_soundness parse_json_string render_json_string s))
+  =
+  let c::tail = String.list_of_string s in 
+  let { result=parsed_characters; remainder=remainder_characters } = parse_json_characters (String.string_of_list tail) in
+  let c'::tail' = String.list_of_string remainder_characters in
+  assert(c = G.char_from_codepoint 0x22);
+  assert(c' = G.char_from_codepoint 0x22);
+  str_decompose s [c] tail;
+  parse_json_characters_soundness (String.string_of_list tail);
+  str_decompose remainder_characters [c'] tail';
+  // s = c + tail = c + (parsed_characters + remainder_characters) = c + (parsed_characters + (c' + tail'))
+  str_concat_assoc (render_json_characters parsed_characters) (G.char_to_str c') (String.string_of_list tail');
+  str_concat_assoc (G.char_to_str c) ((render_json_characters parsed_characters) ^ (G.char_to_str c')) (String.string_of_list tail')
+
+let parse_json_string_completeness (j_string: json_string) :
+  Lemma
+  (ensures (parser_completeness parse_json_string render_json_string j_string))
+  =
+  let rendered_string = render_json_string j_string in
+  let String c characters c' = j_string in
+  String.list_of_string_of_list [c];
+  String.list_of_string_of_list [c'];
+  String.list_of_concat (G.char_to_str c) ((render_json_characters characters) ^ (G.char_to_str c'));
+  String.list_of_concat (render_json_characters characters) (G.char_to_str c');
+
+  let c_::tail_ = String.list_of_string rendered_string in
+  assert (c_ == c);
+  let { result=parsed_characters; remainder=remainder_characters } = parse_json_characters (String.string_of_list tail_) in
+  str_decompose rendered_string [c_] tail_;
+  String.concat_injective (G.char_to_str c) (G.char_to_str c_) ((render_json_characters characters) ^ (G.char_to_str c')) (String.string_of_list tail_);
+  assert(((render_json_characters characters) ^ (G.char_to_str c')) == String.string_of_list tail_);
+  parse_json_characters_termination characters (G.char_to_str c');
+  parse_json_characters_completeness characters;
+  assert(characters == parsed_characters);
+  parse_json_characters_soundness (String.string_of_list tail_);
+  String.concat_injective (render_json_characters characters) (render_json_characters parsed_characters) (G.char_to_str c') remainder_characters;
+  assert(remainder_characters == G.char_to_str c');
+  let c'_::tail'_ = String.list_of_string remainder_characters in
+  string_of_list_eq tail'_ []
