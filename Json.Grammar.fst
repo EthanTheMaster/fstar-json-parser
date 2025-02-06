@@ -55,6 +55,7 @@ type
     | Escape: (c: char{ 
         char_from_codepoint 0x22 = c || // '"'
         char_from_codepoint 0x5C = c || // '\'
+        char_from_codepoint 0x2F = c || // '/'
         char_from_codepoint 0x62 = c || // 'b' 
         char_from_codepoint 0x66 = c || // 'f'
         char_from_codepoint 0x6E = c || // 'n'
@@ -112,8 +113,10 @@ type
         // This diverges from the JSON spec as FStar's char type is restricted to a Unicode Scalar Value.
         // https://www.unicode.org/glossary/#unicode_scalar_value
         (c: char{
-          ~(char_from_codepoint 0x22 = c) /\ // '"'
-          ~(char_from_codepoint 0x5C = c)    // '\'
+          let codepoint = U32.v (Char.u32_of_char c) in
+          ~(char_from_codepoint 0x22 = c) /\          // '"'
+          ~(char_from_codepoint 0x5C = c) /\          // '\'
+          ~(0x00 <= codepoint /\ codepoint <= 0x1F)   // Control characters
         }) ->
         json_character
     | EscapedCharacter:

@@ -396,6 +396,7 @@ let parse_json_escape (s: string) : option (parser_result json_escape) =
     | c::tail -> 
       let is_escape_char = G.char_from_codepoint 0x22 = c || // '"'
                             G.char_from_codepoint 0x5C = c || // '\'
+                            G.char_from_codepoint 0x2F = c || // '/'
                             G.char_from_codepoint 0x62 = c || // 'b' 
                             G.char_from_codepoint 0x66 = c || // 'f'
                             G.char_from_codepoint 0x6E = c || // 'n'
@@ -430,6 +431,7 @@ let parse_json_escape_soundness (s: string) :
   // Handle the escape char
   let is_escape_char = G.char_from_codepoint 0x22 = c || // '"'
                       G.char_from_codepoint 0x5C = c || // '\'
+                      G.char_from_codepoint 0x2F = c || // '/'
                       G.char_from_codepoint 0x62 = c || // 'b' 
                       G.char_from_codepoint 0x66 = c || // 'f'
                       G.char_from_codepoint 0x6E = c || // 'n'
@@ -483,6 +485,12 @@ let parse_json_escape_soundness (s: string) :
       )
       | _ -> ()
 
+let hex_is_char (h: json_hex) : Lemma (ensures(match String.list_of_string (render_json_hex h) with | c::[] -> true | _ -> false)) = 
+  match h with
+    | HexDigit (DigitZero zero) -> String.list_of_string_of_list [zero]
+    | HexDigit (DigitOneNine (OneNine c)) -> String.list_of_string_of_list [c]
+    | HexAF c -> String.list_of_string_of_list [c]
+
 let parse_json_escape_completeness (escape: json_escape) :
   Lemma
   (ensures (parser_completeness parse_json_escape render_json_escape escape))
@@ -500,12 +508,6 @@ let parse_json_escape_completeness (escape: json_escape) :
     | HexCode u h0 h1 h2 h3 -> (
       let u' = String.string_of_list [u] in
       // Helper lemma to prove that hex digits render into one character
-      let hex_is_char (h: json_hex) : Lemma (ensures(match String.list_of_string (render_json_hex h) with | c::[] -> true | _ -> false)) = 
-        match h with
-          | HexDigit (DigitZero zero) -> String.list_of_string_of_list [zero]
-          | HexDigit (DigitOneNine (OneNine c)) -> String.list_of_string_of_list [c]
-          | HexAF c -> String.list_of_string_of_list [c]
-      in
       hex_is_char h0;
       hex_is_char h1;
       hex_is_char h2;
@@ -1234,3 +1236,306 @@ let parse_json_number_completeness (number: json_number) :
 
   // Handle phase 3 of parsing the exponent part
   parse_json_exponent_completeness exponent
+
+let parse_json_character (s: string) : option (parser_result json_character) =
+  match String.list_of_string s with
+    | [] -> None
+    | c::tail -> 
+      let codepoint = U32.v (Char.u32_of_char c) in
+      let unescaped_char = 
+        not (char_from_codepoint 0x22 = c) &&          // '"'
+        not (char_from_codepoint 0x5C = c) &&          // '\'
+        not (0x00 <= codepoint && codepoint <= 0x1F)   // Control characters
+      in
+      if unescaped_char then
+        Some { result = Character c; remainder = String.string_of_list tail }
+      else if char_from_codepoint 0x5C = c then // '\'
+        match parse_json_escape (String.string_of_list tail) with
+          | None -> None
+          | Some { result = escape_result; remainder = escape_remainder } -> Some { result = EscapedCharacter c escape_result; remainder = escape_remainder }
+      else
+         None
+
+let parse_json_character_soundness (s: string) :
+  Lemma
+  (requires (Some? (parse_json_character s)))
+  (ensures (parser_soundness parse_json_character render_json_character s))
+  =
+  match String.list_of_string s with
+    | c::tail -> 
+      let codepoint = U32.v (Char.u32_of_char c) in
+      let unescaped_char = 
+        not (char_from_codepoint 0x22 = c) &&          // '"'
+        not (char_from_codepoint 0x5C = c) &&          // '\'
+        not (0x00 <= codepoint && codepoint <= 0x1F)   // Control characters
+      in
+      str_decompose s [c] tail;
+      if unescaped_char then
+        String.list_of_concat (G.char_to_str c) (String.string_of_list tail)
+      else if char_from_codepoint 0x5C = c then // '\'
+        match parse_json_escape (String.string_of_list tail) with
+          | Some { result = escape_result; remainder = escape_remainder } -> (
+            parse_json_escape_soundness (String.string_of_list tail);
+            str_concat_assoc (G.char_to_str c) (render_json_escape escape_result) escape_remainder
+          )
+      else
+        ()
+
+let parse_json_character_completeness (character: json_character) :
+  Lemma
+  (ensures parser_completeness parse_json_character render_json_character character)
+  =
+  let rendered_character = render_json_character character in
+  match character with
+    | Character c -> (
+      String.list_of_string_of_list [c];
+      let c'::tail' = String.list_of_string rendered_character in
+      string_of_list_eq tail' []
+    )
+    | EscapedCharacter c escape -> (
+      String.list_of_concat (G.char_to_str c) (render_json_escape escape);
+      String.list_of_string_of_list [c];
+      let c'::tail' = String.list_of_string rendered_character in
+      str_decompose rendered_character [c] tail';
+      String.concat_injective (G.char_to_str c) (G.char_to_str c) (String.string_of_list tail') (render_json_escape escape);
+      assert (String.string_of_list tail' == render_json_escape escape);
+      parse_json_escape_completeness escape
+    )
+
+let parse_json_character_termination (character: json_character) (s: string):
+  Lemma
+  (ensures (matching_parse_result (render_json_character character) ((render_json_character character) ^ s) parse_json_character))
+  =
+  match character with
+    | Character c -> (
+      String.list_of_concat (G.char_to_str c) s;
+      String.list_of_string_of_list [c]
+    )
+    | EscapedCharacter c (Escape c') -> (
+      String.list_of_concat (G.char_to_str c) (G.char_to_str c');
+      str_concat_assoc (G.char_to_str c) (G.char_to_str c') s;
+      String.list_of_concat (G.char_to_str c) ((G.char_to_str c') ^ s);
+      String.list_of_concat (G.char_to_str c') s;
+      String.list_of_string_of_list [c];
+      String.list_of_string_of_list [c'];
+      String.string_of_list_of_string ((G.char_to_str c') ^ s)
+    )
+    | EscapedCharacter c (HexCode c' h1 h2 h3 h4) -> (
+      let rendered_c = G.char_to_str c in
+      let rendered_c' = G.char_to_str c' in
+      list_of_string_of_list [c];
+      list_of_string_of_list [c'];
+      hex_is_char h1;
+      hex_is_char h2;
+      hex_is_char h3;
+      hex_is_char h4;
+      let h1'::[] = String.list_of_string (render_json_hex h1) in
+      let h2'::[] = String.list_of_string (render_json_hex h2) in
+      let h3'::[] = String.list_of_string (render_json_hex h3) in
+      let h4'::[] = String.list_of_string (render_json_hex h4) in
+      let rendered_h1 = (G.char_to_str h1') in
+      let rendered_h2 = (G.char_to_str h2') in
+      let rendered_h3 = (G.char_to_str h3') in
+      let rendered_h4 = (G.char_to_str h4') in
+      string_of_list_of_string (render_json_hex h1);
+      string_of_list_of_string (render_json_hex h2);
+      string_of_list_of_string (render_json_hex h3);
+      string_of_list_of_string (render_json_hex h4);
+      list_of_string_of_list [h1'];
+      list_of_string_of_list [h2'];
+      list_of_string_of_list [h3'];
+      list_of_string_of_list [h4'];
+      // It suffices to basically treat h1,h2,h3,h4 as chars h1',h2',h3',h4'
+      assert (rendered_h1 == render_json_hex h1);
+      assert (rendered_h2 == render_json_hex h2);
+      assert (rendered_h3 == render_json_hex h3);
+      assert (rendered_h4 == render_json_hex h4);
+      
+      // Decompose (render_json_character character) case
+      String.list_of_concat rendered_c (rendered_c' ^ rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.string_of_list_of_string (rendered_c' ^ rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.list_of_concat rendered_c' (rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.string_of_list_of_string (rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.list_of_concat rendered_h1 (rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.string_of_list_of_string (rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.list_of_concat rendered_h2 (rendered_h3 ^ rendered_h4);
+      String.string_of_list_of_string (rendered_h3 ^ rendered_h4);
+      String.list_of_concat rendered_h3 rendered_h4;
+      String.string_of_list_of_string rendered_h4;
+
+      // Decompose (render_json_character character) ^ s case
+      str_concat_assoc rendered_c (rendered_c' ^ rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4) s;
+      str_concat_assoc rendered_c' (rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4) s;
+      str_concat_assoc rendered_h1 (rendered_h2 ^ rendered_h3 ^ rendered_h4) s;
+      str_concat_assoc rendered_h2 (rendered_h3 ^ rendered_h4) s;
+      str_concat_assoc rendered_h3 rendered_h4 s;
+      String.list_of_concat rendered_c (rendered_c' ^ rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4 ^ s);
+      String.string_of_list_of_string (rendered_c' ^ rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4 ^ s);
+      String.list_of_concat rendered_c' (rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4 ^ s);
+      String.string_of_list_of_string (rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4 ^ s);
+      String.list_of_concat rendered_h1 (rendered_h2 ^ rendered_h3 ^ rendered_h4 ^ s);
+      String.string_of_list_of_string (rendered_h2 ^ rendered_h3 ^ rendered_h4 ^ s);
+      String.list_of_concat rendered_h2 (rendered_h3 ^ rendered_h4 ^ s);
+      String.string_of_list_of_string (rendered_h3 ^ rendered_h4 ^ s);
+      String.list_of_concat rendered_h3 (rendered_h4 ^ s);
+      String.string_of_list_of_string (rendered_h4 ^ s);
+      String.list_of_concat rendered_h4  s;
+      String.string_of_list_of_string s
+    )
+
+let character_render_length (character: json_character) :
+  Lemma
+  (ensures (
+    let rendered_character = render_json_character character in
+    let length = String.strlen rendered_character in
+    length == 1 \/ length == 2 \/ length == 6
+  ))
+  =
+  match character with
+    | Character c -> String.list_of_string_of_list [c]
+    | EscapedCharacter c (Escape c') -> (
+      String.list_of_string_of_list [c];
+      String.list_of_string_of_list [c'];
+      String.list_of_concat (G.char_to_str c) (G.char_to_str c')
+    )
+    | EscapedCharacter c (HexCode c' h1 h2 h3 h4) -> (
+      let hex_length_one (h: json_hex) : Lemma (ensures (String.strlen (render_json_hex h) == 1)) = 
+        match h with
+          | HexDigit d -> digit_len_one d
+          | HexAF c -> String.list_of_string_of_list [c]
+      in
+      String.list_of_string_of_list [c];
+      String.list_of_string_of_list [c'];
+      hex_length_one h1;
+      hex_length_one h2;
+      hex_length_one h3;
+      hex_length_one h4;
+      let rendered_h1 = render_json_hex h1 in
+      let rendered_h2 = render_json_hex h2 in
+      let rendered_h3 = render_json_hex h3 in
+      let rendered_h4 = render_json_hex h4 in
+      String.concat_length (G.char_to_str c) ((G.char_to_str c') ^ rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.concat_length (G.char_to_str c') (rendered_h1 ^ rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.concat_length rendered_h1 (rendered_h2 ^ rendered_h3 ^ rendered_h4);
+      String.concat_length rendered_h2 (rendered_h3 ^ rendered_h4);
+      String.concat_length rendered_h3 rendered_h4;
+      ()
+    )
+
+let rec parse_json_characters (s: string) : Tot (parser_result json_characters) (decreases (String.strlen s)) = 
+  if s = "" then
+    { result=NoCharacters; remainder=s }
+  else
+    match parse_json_character s with
+      | Some { result=character_result; remainder=character_remainder } -> 
+          // Prove recursive termination
+          character_render_length character_result;
+          assert(String.strlen (render_json_character character_result) > 0);
+          parse_json_character_soundness s;
+          String.concat_length (render_json_character character_result) character_remainder;
+          let { result=characters_result; remainder=characters_remainder } = parse_json_characters character_remainder in
+            {
+              result = Characters character_result characters_result;
+              remainder = characters_remainder
+            }
+      | None -> { result = NoCharacters; remainder = s }
+
+let rec parse_json_characters_soundness (s: string) :
+  Lemma
+  (ensures (parser_soundness (infallible_to_fallible_parser parse_json_characters) render_json_characters s))
+  (decreases (String.strlen s))
+  =
+  if s = "" then
+    prepend_empty_is_identity s
+  else
+    match parse_json_character s with
+      | Some { result=character_result; remainder=character_remainder } -> 
+          let { result=characters_result; remainder=characters_remainder } = parse_json_characters character_remainder in
+          // Prove recursive termination
+          character_render_length character_result;
+          assert(String.strlen (render_json_character character_result) > 0);
+          parse_json_character_soundness s;
+          String.concat_length (render_json_character character_result) character_remainder;
+          parse_json_characters_soundness character_remainder;
+          parse_json_character_soundness s;
+          str_concat_assoc (render_json_character character_result) (render_json_characters characters_result)  characters_remainder
+      | None -> prepend_empty_is_identity s
+
+let empty_iff_len_zero (s: string): Lemma (ensures (s == "" <==> String.strlen s == 0)) = 
+  introduce s == "" ==> String.strlen s == 0
+  with pf_s_empty. 
+  (
+    String.list_of_string_of_list [];
+    list_of_string_eq s (String.string_of_list [])
+  );
+  introduce String.strlen s == 0 ==> s == ""
+  with pf_s_len_zero. 
+  (
+    assert(String.list_of_string s == []);
+    String.string_of_list_of_string s;
+    string_of_list_eq [] (String.list_of_string s)
+  )
+
+let rec parse_json_characters_completeness (characters: json_characters) :
+  Lemma
+  (ensures (parser_completeness (infallible_to_fallible_parser parse_json_characters) render_json_characters characters))
+  =
+  let rendered_characters = render_json_characters characters in
+  match characters with
+    | NoCharacters -> ()
+    | Characters c characters' -> (
+      character_render_length c;
+      String.concat_length (render_json_character c) (render_json_characters characters');
+      assert(String.strlen rendered_characters > 0);
+      empty_iff_len_zero rendered_characters;
+      assert(rendered_characters =!= "");
+      // rendered_characters = (render_json_character c) + (render_json_characters characters')
+      parse_json_character_termination c (render_json_characters characters');
+      parse_json_character_completeness c;
+      let Some {result=character_result; remainder=character_remainder} = parse_json_character rendered_characters in
+      assert (character_result == c);
+      parse_json_character_soundness rendered_characters;
+      String.concat_injective (render_json_character c) (render_json_character character_result) (render_json_characters characters') character_remainder;
+      assert(character_remainder == render_json_characters characters');
+      parse_json_characters_completeness characters'
+    )
+
+// Parsing a string starting with a rendered json_characters followed by a suffix starting with a quotation mark will terminate at this suffix
+// This is a helper lemma for when we will need to parse json_string
+let rec parse_json_characters_termination (characters: json_characters) (s: string):
+  Lemma
+  (requires (that_first_char_of s (fun c -> c = G.char_from_codepoint 0x22))) // '"'
+  (ensures (matching_parse_result (render_json_characters characters) ((render_json_characters characters) ^ s) (infallible_to_fallible_parser parse_json_characters)))
+  =
+  let rendered_characters = render_json_characters characters in
+  match characters with
+    | NoCharacters -> prepend_empty_is_identity s
+    | Characters c characters' -> (
+      // Handle rendered_characters case
+      character_render_length c;
+      String.concat_length (render_json_character c) (render_json_characters characters');
+      assert(String.strlen rendered_characters > 0);
+      empty_iff_len_zero rendered_characters;
+      assert(rendered_characters =!= "");
+      parse_json_character_termination c (render_json_characters characters');
+      parse_json_character_completeness c;
+      let Some {result=character_result; remainder=character_remainder} = parse_json_character rendered_characters in
+      assert (character_result == c);
+      parse_json_character_soundness rendered_characters;
+      String.concat_injective (render_json_character c) (render_json_character character_result) (render_json_characters characters') character_remainder;
+      assert(character_remainder == render_json_characters characters');
+
+      // Handle rendered_characters ^ s case
+      str_concat_assoc (render_json_character c) (render_json_characters characters') s;
+      String.concat_length (render_json_character c) ((render_json_characters characters') ^ s);
+      empty_iff_len_zero (rendered_characters ^ s);
+      assert(rendered_characters ^ s =!= "");
+      parse_json_character_termination c ((render_json_characters characters') ^ s);
+      let Some {result=character_result; remainder=character_remainder} = (parse_json_character (rendered_characters ^ s)) in
+      parse_json_character_soundness (rendered_characters ^ s);
+      String.concat_injective (render_json_character c) (render_json_character character_result) ((render_json_characters characters') ^ s) character_remainder;
+      assert(character_remainder == (render_json_characters characters') ^ s);
+
+      // Having got both rendered_characters and rendered_characters ^ s into a decomposed state, invoke the induction hypothesis
+      parse_json_characters_termination characters' s
+    )
