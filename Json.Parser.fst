@@ -212,8 +212,6 @@ let rec parse_json_ws_completeness (ws: G.json_ws) :
       )
   )
 
-
-
 let parse_json_sign (s: string) : Tot (parser_result G.json_sign) (decreases String.strlen s) = 
   match String.list_of_string s with
     | [] -> {
@@ -1634,3 +1632,27 @@ let parse_json_string_termination (j_string: json_string) (s: string):
   parse_json_characters_soundness (String.string_of_list tail_);
   String.concat_injective (render_json_characters characters) (render_json_characters parsed_characters) ((G.char_to_str c') ^ s) remainder_characters;
   ()
+
+let rec parse_json_ws_termination (s1 s2: string) :
+  Lemma
+  // Not whitespace
+  (requires (that_first_char_of s2 (fun c -> 
+      not(c = G.char_from_codepoint 0x20) && not(c = G.char_from_codepoint 0x0A) && not(c = G.char_from_codepoint 0x0D) && not(c = G.char_from_codepoint 0x09)
+  )))
+  (ensures matching_parse_result s1 (s1 ^ s2) (infallible_to_fallible_parser parse_json_ws))
+  (decreases (String.strlen s1))
+  =
+  match String.list_of_string s1 with
+    | [] -> String.list_of_concat s1 s2
+    | c::tail -> (
+      str_decompose s1 [c] tail;
+      str_concat_assoc (G.char_to_str c) (String.string_of_list tail) s2;
+      String.list_of_concat (G.char_to_str c) ((String.string_of_list tail) ^ s2);
+      String.list_of_string_of_list [c];
+      String.list_of_concat (String.string_of_list tail) s2;
+      String.string_of_list_of_string ((String.string_of_list tail) ^ s2);
+      let c'::tail' = String.list_of_string (s1 ^ s2) in
+      assert(String.string_of_list tail' == ((String.string_of_list tail) ^ s2));
+      str_tail_decrease s1;
+      parse_json_ws_termination (String.string_of_list tail) s2
+    )
