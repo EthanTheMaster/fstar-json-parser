@@ -1657,6 +1657,24 @@ let rec parse_json_ws_termination (s1 s2: string) :
       parse_json_ws_termination (String.string_of_list tail) s2
     )
 
+// Utility lemma saying that the parser result remainder will not start with a whitespace.
+let rec parse_json_ws_remainder_no_whitespace_prefix (s: string) :
+  Lemma
+  (ensures (
+    let { result=_; remainder=remainder } = parse_json_ws s in
+    match String.list_of_string remainder with
+      | [] -> true
+      | c::_ -> not(c = G.char_from_codepoint 0x20) && not(c = G.char_from_codepoint 0x0A) && not(c = G.char_from_codepoint 0x0D) && not(c = G.char_from_codepoint 0x09)
+  ))
+  (decreases (String.strlen s))
+  =
+  match String.list_of_string s with
+    | [] -> ()
+    | c::tail -> (
+      str_tail_decrease s;
+      parse_json_ws_remainder_no_whitespace_prefix (String.string_of_list tail)
+    )
+
 // Implement mutually recursive parser. To assist with termination proof, all parser results have an extra refinement indicating
 // that the remainder part, if it exists, has length at most the length of the input. This is a relaxation of the soundness
 // criteria that will be proven next.
@@ -1774,6 +1792,7 @@ Tot
                     | c''::tail'' ->
                       str_tail_decrease remainder';
                       if c'' = G.char_from_codepoint 0x7D then // '}' 
+                        // Optimization to parse whitespace before parsing members
                         Some { result=Object c (SingletonMember (Member parsed_ws s ws colon elem)) c''; remainder = String.string_of_list tail'' }
                       else
                         None
@@ -1785,6 +1804,7 @@ Tot
                     | c''::tail'' -> 
                       str_tail_decrease remainder';
                       if c'' = G.char_from_codepoint 0x7D then // '}' 
+                        // Optimization to parse whitespace before parsing members
                         Some { result=Object c (Members (Member parsed_ws s ws colon elem) comma members) c''; remainder = String.string_of_list tail'' }
                       else
                         None
@@ -1873,6 +1893,7 @@ Tot
                       | c''::tail'' ->
                         str_tail_decrease remainder';
                         if c'' = G.char_from_codepoint 0x5D then // ']'
+                          // Optimization to parse whitespace before parsing elements
                           Some { result = Array c (SingletonElements (Element parsed_ws v ws)) c''; remainder = String.string_of_list tail'' }
                         else
                           None
@@ -1883,6 +1904,7 @@ Tot
                       | c''::tail'' ->
                         str_tail_decrease remainder';
                         if c'' = G.char_from_codepoint 0x5D then // ']'
+                          // Optimization to parse whitespace before parsing elements
                           Some { result = Array c (Elements (Element parsed_ws v ws) comma elements) c''; remainder = String.string_of_list tail'' }
                         else
                           None
@@ -1930,49 +1952,306 @@ parse_json_element (s: string) :
 
 let parse_json (s: string) : Tot (option (parser_result json)) (decreases %[(String.strlen s); 0]) = admit()
 
+// Prove recursive soundness
 let rec parse_json_value_soundness (s: string) : 
   Lemma (requires (Some? (parse_json_value s))) 
   (ensures (parser_soundness parse_json_value render_json_value s)) 
-  (decreases (String.strlen s))
-  = admit()
+  (decreases %[(String.strlen s); 1])
+  = 
+  match String.list_of_string s with
+    | c::tail -> 
+      // Dispatch to the correct parser depending on the next symbol
+      if c = G.char_from_codepoint 0x7B then // '{' ... Object
+        match parse_json_object s with
+          | Some { result=result; remainder=remainder } -> parse_json_object_soundness s
+      else if c = G.char_from_codepoint 0x5B then // '[' ... Array
+        match parse_json_array s with
+          | Some { result=result; remainder=remainder } -> parse_json_array_soundness s
+      else if c = G.char_from_codepoint 0x22 then // '"' ... String
+        match parse_json_string s with
+          | Some { result=result; remainder=remainder } -> parse_json_string_soundness s
+      else if c = G.char_from_codepoint 0x74 then // 't' ... "true"
+        match String.list_of_string s with
+          | c1::c2::c3::c4::tail -> 
+            // Prove decrease in remainder length
+            str_decompose s [c1;c2;c3;c4] tail;
+            concat_length (String.string_of_list [c1;c2;c3;c4]) (String.string_of_list tail);
+            if c1 = G.char_from_codepoint 0x74 && 
+                c2 = G.char_from_codepoint 0x72 && 
+                c3 = G.char_from_codepoint 0x75 && 
+                c4 = G.char_from_codepoint 0x65 
+            then
+            (
+              string_of_list_eq [c1;c2;c3;c4] (String.list_of_string "true");
+              String.string_of_list_of_string "true";
+              str_decompose s [c1;c2;c3;c4] tail
+            )
+            else
+              ()
+      else if c = G.char_from_codepoint 0x66 then // 'f' ... "false"
+        match String.list_of_string s with
+          | c1::c2::c3::c4::c5::tail -> 
+            // Prove decrease in remainder length
+            str_decompose s [c1;c2;c3;c4;c5] tail;
+            concat_length (String.string_of_list [c1;c2;c3;c4;c5]) (String.string_of_list tail);
+            if c1 = G.char_from_codepoint 0x66 && 
+                c2 = G.char_from_codepoint 0x61 && 
+                c3 = G.char_from_codepoint 0x6C && 
+                c4 = G.char_from_codepoint 0x73 &&
+                c5 = G.char_from_codepoint 0x65
+            then
+            (
+              string_of_list_eq [c1;c2;c3;c4;c5] (String.list_of_string "false");
+              String.string_of_list_of_string "false";
+              str_decompose s [c1;c2;c3;c4;c5] tail
+            )
+            else
+              ()
+      else if c = G.char_from_codepoint 0x6E then // 'n' ... "null"
+        match String.list_of_string s with
+          | c1::c2::c3::c4::tail -> 
+            // Prove decrease in remainder length
+            str_decompose s [c1;c2;c3;c4] tail;
+            concat_length (String.string_of_list [c1;c2;c3;c4]) (String.string_of_list tail);
+            if c1 = G.char_from_codepoint 0x6E && 
+                c2 = G.char_from_codepoint 0x75 && 
+                c3 = G.char_from_codepoint 0x6C && 
+                c4 = G.char_from_codepoint 0x6C 
+            then
+            (
+              string_of_list_eq [c1;c2;c3;c4] (String.list_of_string "null");
+              String.string_of_list_of_string "null";
+              str_decompose s [c1;c2;c3;c4] tail
+            )
+            else
+              ()
+      else // Number
+        match parse_json_number s with
+          | Some { result=result; remainder=remainder } -> parse_json_number_soundness s
+
 and
 parse_json_object_soundness (s: string) : 
   Lemma (requires (Some? (parse_json_object s))) 
   (ensures (parser_soundness parse_json_object render_json_object s)) 
-  (decreases (String.strlen s))
-  = admit()
+  (decreases %[(String.strlen s); 0])
+  =
+  match String.list_of_string s with
+    | c::tail -> 
+      if c = G.char_from_codepoint 0x7B then // '{'
+        let { result=parsed_ws; remainder=remainder } = parse_json_ws (String.string_of_list tail) in
+        str_decompose s [c] tail;
+        parse_json_ws_soundness (String.string_of_list tail);
+        str_tail_decrease s;
+        concat_length (render_json_ws parsed_ws) remainder;
+        match String.list_of_string remainder with
+          | c'::tail' -> 
+            str_decompose remainder [c'] tail';
+            if c' = G.char_from_codepoint 0x7D then // '}'
+            (
+              // s = c + (parsed_ws + (c' + tail'))
+              str_concat_assoc (render_json_ws parsed_ws) (G.char_to_str c') (String.string_of_list tail');
+              str_concat_assoc (G.char_to_str c) ((render_json_ws parsed_ws) ^ (G.char_to_str c')) (String.string_of_list tail')
+            )
+            else
+              // Not empty object
+              let Some { result=parsed_members; remainder=remainder' } = parse_json_members remainder in
+              parse_json_members_soundness remainder;
+              match String.list_of_string remainder' with
+                | c''::tail'' ->
+                  // s = c + (parsed_ws + (parsed_members + (c'' + tail'')))
+                  str_decompose remainder' [c''] tail'';
+                  str_concat_assoc (render_json_members parsed_members) (G.char_to_str c'') (String.string_of_list tail'');
+                  str_concat_assoc (render_json_ws parsed_ws) ((render_json_members parsed_members) ^ (G.char_to_str c'')) (String.string_of_list tail'');
+                  str_concat_assoc (G.char_to_str c) ((render_json_ws parsed_ws) ^ (render_json_members parsed_members) ^ (G.char_to_str c'')) (String.string_of_list tail'');
+                  assert(s == ((G.char_to_str c) ^ (render_json_ws parsed_ws) ^ (render_json_members parsed_members) ^ (G.char_to_str c'')) ^ (String.string_of_list tail''));
+                  str_tail_decrease remainder';
+                  parse_json_ws_remainder_no_whitespace_prefix (String.string_of_list tail);
+                  if c'' = G.char_from_codepoint 0x7D then // '}' 
+                  (
+                    // Decompose the case of parsed_members and justify the optimized substitution of parsed_ws as the first whitespace member of members
+                    str_concat_assoc (render_json_ws parsed_ws) (render_json_members parsed_members) (G.char_to_str c'');
+                    match parsed_members with
+                      | SingletonMember (Member empty s ws colon elem) -> (
+                        assert(empty == NoWhitespace);
+                        prepend_empty_is_identity ((render_json_string s) ^ (render_json_ws ws) ^ (G.char_to_str colon) ^ (render_json_element elem));
+                        assert(render_json_members parsed_members == ((render_json_string s) ^ (render_json_ws ws) ^ (G.char_to_str colon) ^ (render_json_element elem)))
+                      )
+                      | Members (Member empty s ws colon elem) comma members -> (
+                        assert(empty == NoWhitespace);
+                        prepend_empty_is_identity ((render_json_string s) ^ (render_json_ws ws) ^ (G.char_to_str colon) ^ (render_json_element elem));
+                        str_concat_assoc (render_json_ws parsed_ws) (render_json_member (Member empty s ws colon elem)) ((G.char_to_str comma) ^ (render_json_members members))
+                      )
+                  )
+                  else
+                    ()
+      else
+        ()
 and
 parse_json_members_soundness (s: string) : 
   Lemma (requires (Some? (parse_json_members s))) 
   (ensures (parser_soundness parse_json_members render_json_members s)) 
-  (decreases (String.strlen s))
-  = admit()
+  (decreases %[(String.strlen s); 4])
+  =
+  match parse_json_member s with
+    | Some { result=parsed_member; remainder=remainder } -> 
+      (
+      parse_json_member_soundness s;
+      match String.list_of_string remainder with
+        | [] -> ()
+        | c::tail -> 
+          if c = G.char_from_codepoint 0x2C then // ','
+          (
+            // Prove termination
+            str_decompose remainder [c] tail;
+            str_tail_decrease remainder;
+            match parse_json_members (String.string_of_list tail) with
+              | Some { result=parsed_members; remainder=remainder } -> 
+                (
+                  parse_json_members_soundness (String.string_of_list tail);
+                  // s = parsed_member + (c + (parsed_members + remainder))
+                  str_concat_assoc (G.char_to_str c) (render_json_members parsed_members) remainder;
+                  str_concat_assoc (render_json_member parsed_member) ((G.char_to_str c) ^ (render_json_members parsed_members)) remainder
+                )
+          )
+          else
+            ()
+      )
 and
 parse_json_member_soundness (s: string) : 
   Lemma (requires (Some? (parse_json_member s))) 
   (ensures (parser_soundness parse_json_member render_json_member s)) 
-  (decreases (String.strlen s))
-  = admit()
+  (decreases %[(String.strlen s); 3])
+  =
+  let { result=parsed_ws; remainder=remainder } = parse_json_ws s in
+  parse_json_ws_soundness s;
+  concat_length (render_json_ws parsed_ws) remainder;
+  match parse_json_string remainder with
+    | Some { result=parsed_string; remainder=remainder' } -> 
+      parse_json_string_soundness remainder;
+      concat_length (render_json_string parsed_string) remainder';
+      let { result=parsed_ws'; remainder=remainder'' } = parse_json_ws remainder' in
+      parse_json_ws_soundness remainder';
+      concat_length (render_json_ws parsed_ws') remainder'';
+      match String.list_of_string remainder'' with
+        | c::tail ->
+          str_tail_decrease remainder'';
+          str_decompose remainder'' [c] tail;
+          if c = G.char_from_codepoint 0x3A then // ':'
+            match parse_json_element (String.string_of_list tail) with
+              | Some { result=parsed_element; remainder=remainder''' } ->
+              (
+                  parse_json_element_soundness (String.string_of_list tail);
+                  // s = parsed_ws + (parsed_string + (parsed_ws' + (c + (parsed_element + remainder'''))))
+                  str_concat_assoc (G.char_to_str c) (render_json_element parsed_element) remainder''';
+                  str_concat_assoc (render_json_ws parsed_ws') ((G.char_to_str c) ^ (render_json_element parsed_element)) remainder''';
+                  str_concat_assoc (render_json_string parsed_string) ((render_json_ws parsed_ws') ^ (G.char_to_str c) ^ (render_json_element parsed_element)) remainder''';
+                  str_concat_assoc (render_json_ws parsed_ws) ((render_json_string parsed_string) ^ (render_json_ws parsed_ws') ^ (G.char_to_str c) ^ (render_json_element parsed_element)) remainder'''
+              )
+          else
+            ()
 and
 parse_json_array_soundness (s: string) : 
   Lemma (requires (Some? (parse_json_array s))) 
   (ensures (parser_soundness parse_json_array render_json_array s)) 
-  (decreases (String.strlen s))
-  = admit()
+  (decreases %[(String.strlen s); 0])
+  =
+  match String.list_of_string s with
+    | c::tail ->
+      if c = G.char_from_codepoint 0x5B then // '['
+        let { result=parsed_ws; remainder=remainder } = parse_json_ws (String.string_of_list tail) in
+        str_decompose s [c] tail;
+        str_tail_decrease s;
+        parse_json_ws_soundness (String.string_of_list tail);
+        concat_length (render_json_ws parsed_ws) remainder;
+        match String.list_of_string remainder with
+          | c'::tail' ->
+            str_decompose remainder [c'] tail';
+            str_tail_decrease remainder;
+            if c' = G.char_from_codepoint 0x5D then // ']'
+            (
+              // s = c + (parsed_ws + (c' + tail'))
+              str_concat_assoc (render_json_ws parsed_ws) (G.char_to_str c') (String.string_of_list tail');
+              str_concat_assoc (G.char_to_str c) ((render_json_ws parsed_ws) ^ (G.char_to_str c')) (String.string_of_list tail')
+            )
+            else
+            (
+              let Some { result=parsed_elements; remainder=remainder' } = parse_json_elements remainder in
+              parse_json_elements_soundness remainder;
+              let c''::tail'' = String.list_of_string remainder' in
+              str_decompose remainder' [c''] tail'';
+              str_tail_decrease remainder';
+              if c'' = G.char_from_codepoint 0x5D then // ']'
+              (
+                // s = c + (parsed_ws + (parsed_elements + (c'' + tail'')))
+                str_concat_assoc (render_json_elements parsed_elements) (G.char_to_str c'') (String.string_of_list tail'');
+                str_concat_assoc (render_json_ws parsed_ws) ((render_json_elements parsed_elements) ^ (G.char_to_str c'')) (String.string_of_list tail'');
+                str_concat_assoc (G.char_to_str c) ((render_json_ws parsed_ws) ^ (render_json_elements parsed_elements) ^ (G.char_to_str c'')) (String.string_of_list tail'');
+                assert(s == ((G.char_to_str c) ^ (render_json_ws parsed_ws) ^ (render_json_elements parsed_elements) ^ (G.char_to_str c'')) ^ (String.string_of_list tail''));
+                // Justify optimization of substituting parsed_ws into first member of the json_element
+                str_concat_assoc (render_json_ws parsed_ws) (render_json_elements parsed_elements) (G.char_to_str c'');
+                parse_json_ws_remainder_no_whitespace_prefix (String.string_of_list tail);
+                match parsed_elements with
+                  | SingletonElements (Element empty v ws) -> (
+                    assert(empty == NoWhitespace);
+                    prepend_empty_is_identity ((render_json_value v) ^ (render_json_ws ws))
+                  )
+                  | Elements (Element empty v ws) comma elements -> (
+                    assert(empty == NoWhitespace);
+                    prepend_empty_is_identity ((render_json_value v) ^ (render_json_ws ws));
+                    str_concat_assoc (render_json_ws parsed_ws) (render_json_element (Element empty v ws)) ((G.char_to_str comma) ^ (render_json_elements elements))
+                  )
+              )
+              else
+                ()
+            )
+      else
+        ()
 and
 parse_json_elements_soundness (s: string) : 
   Lemma (requires (Some? (parse_json_elements s))) 
   (ensures (parser_soundness parse_json_elements render_json_elements s)) 
-  (decreases (String.strlen s))
-  = admit()
+  (decreases %[(String.strlen s); 3])
+  =
+  match parse_json_element s with
+    | Some { result=parsed_element; remainder=remainder } ->
+        parse_json_element_soundness s;
+        match String.list_of_string remainder with
+          | [] -> ()
+          | c::tail ->
+              // Prove termination
+              str_decompose remainder [c] tail;
+              str_tail_decrease remainder;
+              if c = G.char_from_codepoint 0x2C then // ','
+                match parse_json_elements (String.string_of_list tail) with
+                  | Some { result=parsed_elements; remainder=remainder' } ->
+                    (
+                      parse_json_elements_soundness (String.string_of_list tail);
+                      // s = parsed_element + (c + (parsed_elements + remainder'))
+                      str_concat_assoc (G.char_to_str c) (render_json_elements parsed_elements) remainder';
+                      str_concat_assoc (render_json_element parsed_element) ((G.char_to_str c) ^ (render_json_elements parsed_elements)) remainder'
+                    )
+              else
+                ()
 and
 parse_json_element_soundness (s: string) : 
   Lemma (requires (Some? (parse_json_element s))) 
   (ensures (parser_soundness parse_json_element render_json_element s)) 
-  (decreases (String.strlen s))
-  = admit()
-and
-parse_json_soundness (s: string) : 
+  (decreases %[(String.strlen s); 2])
+  =
+  let { result=parsed_ws; remainder=remainder } = parse_json_ws s in
+  parse_json_ws_soundness s;
+  concat_length (render_json_ws parsed_ws) remainder;
+  match parse_json_value remainder with
+    | Some { result=parsed_value; remainder=remainder' } ->
+      parse_json_value_soundness remainder;
+      let { result=parsed_ws'; remainder=remainder'' } = parse_json_ws remainder' in
+      parse_json_ws_soundness remainder';
+      concat_length (render_json_ws parsed_ws') remainder'';
+      // s = parsed_ws + (parsed_value + (parsed_ws' + remainder''))
+      str_concat_assoc (render_json_value parsed_value) (render_json_ws parsed_ws') remainder'';
+      str_concat_assoc (render_json_ws parsed_ws) ((render_json_value parsed_value) ^ (render_json_ws parsed_ws')) remainder''
+
+let parse_json_soundness (s: string) : 
   Lemma (requires (Some? (parse_json s))) 
   (ensures (parser_soundness parse_json render_json s)) 
   (decreases (String.strlen s))
