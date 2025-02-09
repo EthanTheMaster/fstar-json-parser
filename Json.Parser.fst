@@ -1657,10 +1657,19 @@ let rec parse_json_ws_termination (s1 s2: string) :
       parse_json_ws_termination (String.string_of_list tail) s2
     )
 
-let rec parse_json_value (s: string) : Tot (option (parser_result json_value)) (decreases %[(String.strlen s); 2]) =
+// Implement mutually recursive parser. To assist with termination proof, all parser results have an extra refinement indicating
+// that the remainder part, if it exists, has length at most the length of the input. This is a relaxation of the soundness
+// criteria that will be proven next.
+//
+// Decrease criteria has also been refined to assist FStar into proving termination.
+let rec parse_json_value (s: string) : 
+Tot 
+(res: option (parser_result json_value) {Some? res ==> String.strlen ((Some?.v res).remainder) <= String.strlen s})
+(decreases %[(String.strlen s); 1]) =
   match String.list_of_string s with
     | [] -> None
     | c::tail -> 
+      // Dispatch to the correct parser depending on the next symbol
       if c = G.char_from_codepoint 0x7B then // '{' ... Object
         match parse_json_object s with
           | None -> None
@@ -1672,10 +1681,18 @@ let rec parse_json_value (s: string) : Tot (option (parser_result json_value)) (
       else if c = G.char_from_codepoint 0x22 then // '"' ... String
         match parse_json_string s with
           | None -> None
-          | Some { result=result; remainder=remainder } -> Some { result=StringValue result; remainder=remainder }
+          | Some { result=result; remainder=remainder } -> (
+            // Prove decrease in remainder length
+            parse_json_string_soundness s;
+            concat_length (render_json_string result) remainder;
+            Some { result=StringValue result; remainder=remainder }
+          )
       else if c = G.char_from_codepoint 0x74 then // 't' ... "true"
         match String.list_of_string s with
           | c1::c2::c3::c4::tail -> 
+            // Prove decrease in remainder length
+            str_decompose s [c1;c2;c3;c4] tail;
+            concat_length (String.string_of_list [c1;c2;c3;c4]) (String.string_of_list tail);
             if c1 = G.char_from_codepoint 0x74 && 
                 c2 = G.char_from_codepoint 0x72 && 
                 c3 = G.char_from_codepoint 0x75 && 
@@ -1688,6 +1705,9 @@ let rec parse_json_value (s: string) : Tot (option (parser_result json_value)) (
       else if c = G.char_from_codepoint 0x66 then // 'f' ... "false"
         match String.list_of_string s with
           | c1::c2::c3::c4::c5::tail -> 
+            // Prove decrease in remainder length
+            str_decompose s [c1;c2;c3;c4;c5] tail;
+            concat_length (String.string_of_list [c1;c2;c3;c4;c5]) (String.string_of_list tail);
             if c1 = G.char_from_codepoint 0x66 && 
                 c2 = G.char_from_codepoint 0x61 && 
                 c3 = G.char_from_codepoint 0x6C && 
@@ -1701,6 +1721,9 @@ let rec parse_json_value (s: string) : Tot (option (parser_result json_value)) (
       else if c = G.char_from_codepoint 0x6E then // 'n' ... "null"
         match String.list_of_string s with
           | c1::c2::c3::c4::tail -> 
+            // Prove decrease in remainder length
+            str_decompose s [c1;c2;c3;c4] tail;
+            concat_length (String.string_of_list [c1;c2;c3;c4]) (String.string_of_list tail);
             if c1 = G.char_from_codepoint 0x6E && 
                 c2 = G.char_from_codepoint 0x75 && 
                 c3 = G.char_from_codepoint 0x6C && 
@@ -1713,10 +1736,18 @@ let rec parse_json_value (s: string) : Tot (option (parser_result json_value)) (
       else // Number
         match parse_json_number s with
           | None -> None
-          | Some { result=result; remainder=remainder } -> Some { result=NumberValue result; remainder=remainder }
+          | Some { result=result; remainder=remainder } -> (
+              // Prove decrease in remainder length
+              parse_json_number_soundness s;
+              concat_length (render_json_number result) remainder;
+              Some { result=NumberValue result; remainder=remainder }
+            )
 
 and
-parse_json_object (s: string) : Tot (option (parser_result json_object)) (decreases %[(String.strlen s); 1]) =
+parse_json_object (s: string) :
+Tot
+(res: option (parser_result json_object) {Some? res ==> String.strlen ((Some?.v res).remainder) <= String.strlen s})
+(decreases %[(String.strlen s); 0]) =
   match String.list_of_string s with
     | [] -> None
     | c::tail -> 
@@ -1729,6 +1760,7 @@ parse_json_object (s: string) : Tot (option (parser_result json_object)) (decrea
         match String.list_of_string remainder with
           | [] -> None
           | c'::tail' -> 
+            str_tail_decrease remainder;
             if c' = G.char_from_codepoint 0x7D then // '}'
               Some { result=EmptyObject c parsed_ws c'; remainder=String.string_of_list tail'}
             else
@@ -1739,7 +1771,8 @@ parse_json_object (s: string) : Tot (option (parser_result json_object)) (decrea
                 (
                   match String.list_of_string remainder' with
                     | [] -> None
-                    | c''::tail'' -> 
+                    | c''::tail'' ->
+                      str_tail_decrease remainder';
                       if c'' = G.char_from_codepoint 0x7D then // '}' 
                         Some { result=Object c (SingletonMember (Member parsed_ws s ws colon elem)) c''; remainder = String.string_of_list tail'' }
                       else
@@ -1750,6 +1783,7 @@ parse_json_object (s: string) : Tot (option (parser_result json_object)) (decrea
                   match String.list_of_string remainder' with
                     | [] -> None
                     | c''::tail'' -> 
+                      str_tail_decrease remainder';
                       if c'' = G.char_from_codepoint 0x7D then // '}' 
                         Some { result=Object c (Members (Member parsed_ws s ws colon elem) comma members) c''; remainder = String.string_of_list tail'' }
                       else
@@ -1758,7 +1792,10 @@ parse_json_object (s: string) : Tot (option (parser_result json_object)) (decrea
       else
         None
 and
-parse_json_members (s: string) : Tot (option (parser_result json_members)) (decreases %[(String.strlen s); 1]) =
+parse_json_members (s: string) :
+Tot
+(res: option (parser_result json_members) {Some? res ==> String.strlen ((Some?.v res).remainder) <= String.strlen s})
+(decreases %[(String.strlen s); 4]) =
   match parse_json_member s with
     | None -> None
     | Some { result=parsed_member; remainder=remainder } -> 
@@ -1782,7 +1819,7 @@ and
 parse_json_member (s: string) : 
   Tot 
   (res: option (parser_result json_member) {Some? res ==> String.strlen ((Some?.v res).remainder) <= String.strlen s}) 
-  (decreases %[(String.strlen s); 0]) 
+  (decreases %[(String.strlen s); 3]) 
   = 
   let { result=parsed_ws; remainder=remainder } = parse_json_ws s in
   parse_json_ws_soundness s;
@@ -1807,7 +1844,10 @@ parse_json_member (s: string) :
           else
             None
 and
-parse_json_array (s: string) : Tot (option (parser_result json_array)) (decreases %[(String.strlen s); 1]) = 
+parse_json_array (s: string) :
+Tot 
+(res: option (parser_result json_array) {Some? res ==> String.strlen ((Some?.v res).remainder) <= String.strlen s})
+(decreases %[(String.strlen s); 0]) = 
   match String.list_of_string s with
     | [] -> None
     | c::tail ->
@@ -1819,6 +1859,7 @@ parse_json_array (s: string) : Tot (option (parser_result json_array)) (decrease
         match String.list_of_string remainder with
           | [] -> None
           | c'::tail' ->
+            str_tail_decrease remainder;
             if c' = G.char_from_codepoint 0x5D then // ']'
               Some { result=EmptyArray c parsed_ws c'; remainder=String.string_of_list tail' }
             else
@@ -1830,6 +1871,7 @@ parse_json_array (s: string) : Tot (option (parser_result json_array)) (decrease
                     match String.list_of_string remainder' with
                       | [] -> None
                       | c''::tail'' ->
+                        str_tail_decrease remainder';
                         if c'' = G.char_from_codepoint 0x5D then // ']'
                           Some { result = Array c (SingletonElements (Element parsed_ws v ws)) c''; remainder = String.string_of_list tail'' }
                         else
@@ -1839,6 +1881,7 @@ parse_json_array (s: string) : Tot (option (parser_result json_array)) (decrease
                     match String.list_of_string remainder' with
                       | [] -> None
                       | c''::tail'' ->
+                        str_tail_decrease remainder';
                         if c'' = G.char_from_codepoint 0x5D then // ']'
                           Some { result = Array c (Elements (Element parsed_ws v ws) comma elements) c''; remainder = String.string_of_list tail'' }
                         else
@@ -1847,12 +1890,43 @@ parse_json_array (s: string) : Tot (option (parser_result json_array)) (decrease
       else
         None
 and
-parse_json_elements (s: string) : Tot (option (parser_result json_elements)) (decreases %[(String.strlen s); 1]) = admit()
+parse_json_elements (s: string) :
+Tot
+(res: option (parser_result json_elements) {Some? res ==> String.strlen ((Some?.v res).remainder) <= String.strlen s})
+(decreases %[(String.strlen s); 3]) = 
+  match parse_json_element s with
+    | None -> None
+    | Some { result=parsed_element; remainder=remainder } ->
+        match String.list_of_string remainder with
+          | [] -> Some { result=SingletonElements parsed_element; remainder=remainder }
+          | c::tail ->
+              // Prove termination
+              str_tail_decrease remainder;
+              if c = G.char_from_codepoint 0x2C then // ','
+                match parse_json_elements (String.string_of_list tail) with
+                  | None -> None
+                  | Some { result=parsed_elements; remainder=remainder' } ->
+                      Some { result=Elements parsed_element c parsed_elements; remainder=remainder' }
+              else
+                Some { result=SingletonElements parsed_element; remainder=remainder }
+
 and
 parse_json_element (s: string) : 
   Tot 
   (res: option (parser_result json_element) {Some? res ==> String.strlen ((Some?.v res).remainder) <= String.strlen s}) 
-  (decreases %[(String.strlen s); 0]) = admit()
+  (decreases %[(String.strlen s); 2])
+  = 
+  let { result=parsed_ws; remainder=remainder } = parse_json_ws s in
+  parse_json_ws_soundness s;
+  concat_length (render_json_ws parsed_ws) remainder;
+  match parse_json_value remainder with
+    | None -> None
+    | Some { result=parsed_value; remainder=remainder' } ->
+      let { result=parsed_ws'; remainder=remainder'' } = parse_json_ws remainder' in
+      parse_json_ws_soundness remainder';
+      concat_length (render_json_ws parsed_ws') remainder'';
+      Some { result=Element parsed_ws parsed_value parsed_ws'; remainder=remainder'' } 
+
 
 let parse_json (s: string) : Tot (option (parser_result json)) (decreases %[(String.strlen s); 0]) = admit()
 
