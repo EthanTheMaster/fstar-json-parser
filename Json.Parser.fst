@@ -110,6 +110,8 @@ let str_concat_assoc (s1 s2 s3: string) : Lemma (ensures ((s1 ^ s2) ^ s3) == (s1
   string_of_list_of_string (s1 ^ (s2 ^ s3))
 
 
+let is_char_whitespace (c: char) = (c = G.char_from_codepoint 0x20) || (c = G.char_from_codepoint 0x0A) || (c = G.char_from_codepoint 0x0D) || (c = G.char_from_codepoint 0x09)
+
 let rec parse_json_ws (s: string) : Tot (parser_result G.json_ws) (decreases (String.strlen s)) = 
   match String.list_of_string s with
   | [] -> { // Empty string
@@ -117,7 +119,7 @@ let rec parse_json_ws (s: string) : Tot (parser_result G.json_ws) (decreases (St
     remainder = s;
   }
   | c::tail -> 
-    let is_whitespace = (c = G.char_from_codepoint 0x20) || (c = G.char_from_codepoint 0x0A) || (c = G.char_from_codepoint 0x0D) || (c = G.char_from_codepoint 0x09) in
+    let is_whitespace = is_char_whitespace c in
     if is_whitespace then
       let tail_str = String.string_of_list tail in
       // Prove termination of recursive call
@@ -158,7 +160,7 @@ let rec parse_json_ws_soundness (s: string) :
       // By definition of parse_json_ws, it suffices to show s == "" + s
       prepend_empty_is_identity s
     | c::tail -> 
-      let is_whitespace = (c = G.char_from_codepoint 0x20) || (c = G.char_from_codepoint 0x0A) || (c = G.char_from_codepoint 0x0D) || (c = G.char_from_codepoint 0x09) in
+      let is_whitespace = is_char_whitespace c in
       if is_whitespace then
         let tail_str = String.string_of_list tail in
         let tail_parse = parse_json_ws tail_str in
@@ -1235,6 +1237,105 @@ let parse_json_number_completeness (number: json_number) :
   // Handle phase 3 of parsing the exponent part
   parse_json_exponent_completeness exponent
 
+// Helper function to detect if a character can extend a parsed json_number
+let is_char_not_json_number_extendable (c: char) = 
+    // Combine requirements of exponent, digits, fraction termination
+    not (is_digit_char c) && 
+    not (c = G.char_from_codepoint 0x2E) && 
+    not (c = G.char_from_codepoint 0x65) && 
+    not (c = G.char_from_codepoint 0x45) &&
+    not (c = G.char_from_codepoint 0x2B) &&
+    not (c = G.char_from_codepoint 0x2D)
+
+let parse_json_number_termination (number: json_number) (s: string):
+  Lemma
+  (requires (that_first_char_of s (fun c -> is_char_not_json_number_extendable c)))
+  (ensures (matching_parse_result (render_json_number number) ((render_json_number number) ^ s) parse_json_number))
+  =
+  let rendered_number = render_json_number number in
+  let Number integer fraction exponent = number in
+  let rendered_integer = render_json_integer integer in
+  let rendered_fraction = render_json_fraction fraction in
+  let rendered_exponent = render_json_exponent exponent in
+  json_fraction_empty_or_period fraction;
+  json_exponent_empty_or_e exponent;
+
+  // Handle rendered_number case
+  // rendered_number = rendered_integer + (rendered_fraction + rendered_exponent)
+  str_concat_assoc rendered_integer rendered_fraction rendered_exponent;
+  parse_json_integer_termination (rendered_integer ^ rendered_fraction) rendered_exponent;
+  parse_json_integer_termination rendered_integer rendered_fraction;
+  parse_json_integer_completeness integer;
+  parse_json_integer_soundness rendered_number;
+  let Some {result=integer'; remainder=remainder} = parse_json_integer rendered_number in
+  String.concat_length rendered_integer (rendered_fraction ^ rendered_exponent);
+  String.concat_length (render_json_integer integer') remainder;
+  String.concat_injective rendered_integer (render_json_integer integer') (rendered_fraction ^ rendered_exponent) remainder;
+  parse_json_fraction_termination rendered_fraction rendered_exponent;
+  parse_json_fraction_completeness fraction;
+  parse_json_fraction_soundness remainder;
+  let {result=fraction'; remainder=remainder} = parse_json_fraction remainder in
+  String.concat_length rendered_fraction rendered_exponent;
+  String.concat_length (render_json_fraction fraction') remainder;
+  String.concat_injective rendered_fraction (render_json_fraction fraction') rendered_exponent remainder;
+
+  // Handle rendered_number ^ s case
+  // rendered_number + s = (rendered_integer + rendered_fraction + rendered_exponent) + s
+  str_concat_assoc rendered_integer rendered_fraction rendered_exponent;
+  str_concat_assoc rendered_integer (rendered_fraction ^ rendered_exponent) s;
+  str_concat_assoc rendered_fraction rendered_exponent s;
+
+  parse_json_integer_termination (rendered_integer ^ rendered_fraction ^ rendered_exponent) s;
+  parse_json_integer_termination (rendered_integer ^ rendered_fraction) rendered_exponent;
+  parse_json_integer_termination rendered_integer rendered_fraction;
+  parse_json_integer_completeness integer;
+  parse_json_integer_soundness (rendered_number ^ s);
+  let Some {result=integer'; remainder=remainder} = parse_json_integer (rendered_number ^ s) in
+  String.concat_length rendered_integer (rendered_fraction ^ rendered_exponent ^ s);
+  String.concat_length (render_json_integer integer') remainder;
+  String.concat_injective rendered_integer (render_json_integer integer') (rendered_fraction ^ rendered_exponent ^ s) remainder;
+  // Justify precondition of fraction termination for rendered_exponent ^ s
+  prepend_empty_is_identity s; // NoExponent case
+  String.list_of_concat rendered_exponent s; // Exponent case
+  parse_json_fraction_termination rendered_fraction (rendered_exponent ^ s);
+  parse_json_fraction_completeness fraction;
+  parse_json_fraction_soundness remainder;
+  let {result=fraction'; remainder=remainder} = parse_json_fraction remainder in
+  String.concat_length rendered_fraction (rendered_exponent ^ s);
+  String.concat_length (render_json_fraction fraction') remainder;
+  String.concat_injective rendered_fraction (render_json_fraction fraction') (rendered_exponent ^ s) remainder;
+
+  // Invoke exponent termination to prove the final step that the parse_json_exponent stage is the same
+  parse_json_exponent_termination (render_json_exponent exponent) s
+
+// Utility lemma indicating the a json_number starts with a negative sign or a digit
+let json_number_start_character (number: json_number) : 
+  Lemma 
+  (ensures (
+    that_first_char_of (render_json_number number) (fun c -> 
+      is_digit_char c ||
+      c = G.char_from_codepoint 0x2D // '-'
+      )
+    ) /\ not(String.list_of_string (render_json_number number) = []))
+  =
+  let Number integer fraction exponent = number in
+  String.list_of_concat (render_json_integer integer) ((render_json_fraction fraction) ^ (render_json_exponent exponent));
+  match integer with
+    | IntDigit digit -> digits_start_character (DigitsSingle digit)
+    | IntDigits onenine digits -> (
+      list_of_concat (render_json_onenine onenine) (render_json_digits digits);
+      digits_start_character (DigitsSingle (DigitOneNine onenine))
+    )
+    | IntNegDigit neg digit -> (
+      String.list_of_string_of_list [neg];
+      String.list_of_concat (G.char_to_str neg) (render_json_digit digit)
+    )
+    | IntNegDigits neg onenine digits -> (
+      String.list_of_string_of_list [neg];
+      str_concat_assoc (G.char_to_str neg) (render_json_onenine onenine) (render_json_digits digits);
+      String.list_of_concat (G.char_to_str neg) ((render_json_onenine onenine) ^ (render_json_digits digits))
+    )
+
 let parse_json_character (s: string) : option (parser_result json_character) =
   match String.list_of_string s with
     | [] -> None
@@ -1636,9 +1737,7 @@ let parse_json_string_termination (j_string: json_string) (s: string):
 let rec parse_json_ws_termination (s1 s2: string) :
   Lemma
   // Not whitespace
-  (requires (that_first_char_of s2 (fun c -> 
-      not(c = G.char_from_codepoint 0x20) && not(c = G.char_from_codepoint 0x0A) && not(c = G.char_from_codepoint 0x0D) && not(c = G.char_from_codepoint 0x09)
-  )))
+  (requires (that_first_char_of s2 (fun c -> not(is_char_whitespace c))))
   (ensures matching_parse_result s1 (s1 ^ s2) (infallible_to_fallible_parser parse_json_ws))
   (decreases (String.strlen s1))
   =
@@ -1664,7 +1763,7 @@ let rec parse_json_ws_remainder_no_whitespace_prefix (s: string) :
     let { result=_; remainder=remainder } = parse_json_ws s in
     match String.list_of_string remainder with
       | [] -> true
-      | c::_ -> not(c = G.char_from_codepoint 0x20) && not(c = G.char_from_codepoint 0x0A) && not(c = G.char_from_codepoint 0x0D) && not(c = G.char_from_codepoint 0x09)
+      | c::_ -> not(is_char_whitespace c)
   ))
   (decreases (String.strlen s))
   =
@@ -1948,9 +2047,6 @@ parse_json_element (s: string) :
       parse_json_ws_soundness remainder';
       concat_length (render_json_ws parsed_ws') remainder'';
       Some { result=Element parsed_ws parsed_value parsed_ws'; remainder=remainder'' } 
-
-
-let parse_json (s: string) : Tot (option (parser_result json)) (decreases %[(String.strlen s); 0]) = admit()
 
 // Prove recursive soundness
 let rec parse_json_value_soundness (s: string) : 
@@ -2251,11 +2347,148 @@ parse_json_element_soundness (s: string) :
       str_concat_assoc (render_json_value parsed_value) (render_json_ws parsed_ws') remainder'';
       str_concat_assoc (render_json_ws parsed_ws) ((render_json_value parsed_value) ^ (render_json_ws parsed_ws')) remainder''
 
-let parse_json_soundness (s: string) : 
-  Lemma (requires (Some? (parse_json s))) 
-  (ensures (parser_soundness parse_json render_json s)) 
-  (decreases (String.strlen s))
-  = admit()
+// Utility lemma stating that the start character of s1 is the same as s1^s2 for any strings s1 and s2, assuming s1 has a starting character
+let start_character_concat (s1 s2: string) :
+  Lemma
+  (ensures 
+    (that_first_char_of s1 (fun c1 -> that_first_char_of (s1 ^ s2) (fun c2 -> c1 = c2))) /\
+    // Technical condition to make life easier by telling Fstar that the inner that_first_char_of is not vacuously true
+    // when s1 is non-empty. 
+    (not(String.list_of_string s1 = []) ==> not(String.list_of_string (s1 ^ s2) = []))
+  )
+  =
+  match String.list_of_string s1 with
+    | [] -> ()
+    | c::tail -> (
+      String.list_of_string_of_list [c];
+      str_decompose s1 [c] tail;
+      str_concat_assoc (G.char_to_str c) (String.string_of_list tail) s2;
+      String.list_of_concat (G.char_to_str c) ((String.string_of_list tail) ^ s2)
+    )
+
+
+// Termination proof is causing proving weirdness. Increasing Z3 resources.
+#set-options "--z3rlimit 1000"
+let rec parse_json_value_termination (value: json_value) (s: string):
+  Lemma
+  (requires (that_first_char_of s (fun c -> is_char_not_json_number_extendable c)))
+  (ensures (matching_parse_result (render_json_value value) ((render_json_value value) ^ s) parse_json_value))
+  =
+  let rendered_value = render_json_value value in
+  // Helper lemma to make the proof easier showing that appending s doesn't affect which parser we dispatch to
+  start_character_concat rendered_value s;
+  match value with
+    | ObjectValue object -> (
+      parse_json_object_termination object s;
+      // Prove that object renders into a string starting with '{' which lets us proceed with the object termination proof 
+      // We also need to prove that rendered_object^s starts with '{' to make object termination proof useful.
+      match object with
+        | EmptyObject c0 ws c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
+        )
+        | Object c0 members c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1))
+        )
+    )
+    | ArrayValue array -> (
+      parse_json_array_termination array s;
+      // Prove that array renders into a string starting with '[' which lets us proceed with the array termination proof 
+      // We also need to prove that rendered_object^s starts with '[' to make array termination proof useful.
+      match array with
+        | EmptyArray c0 ws c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
+        )
+        | Array c0 elems c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1))
+        )
+    )
+    | StringValue string -> (
+      parse_json_string_termination string s;
+
+      let String c0 chars c1 = string in 
+      String.list_of_string_of_list [c0];
+      String.list_of_concat (G.char_to_str c0) ((render_json_characters chars) ^ (G.char_to_str c1))
+    )
+    | NumberValue number -> (
+      parse_json_number_termination number s;
+      json_number_start_character number
+    )
+    | BooleanValue boolean -> (
+      String.list_of_concat rendered_value s;
+      if boolean = "true" then
+      (
+        String.list_of_string_of_list ['t';'r';'u';'e'];
+        list_of_string_eq boolean (String.string_of_list ['t';'r';'u';'e'])
+      )
+      else
+      (
+        String.list_of_string_of_list ['f';'a';'l';'s';'e'];
+        list_of_string_eq boolean (String.string_of_list ['f';'a';'l';'s';'e'])
+      )
+    )
+    | NullValue null -> (
+        String.list_of_concat null s;
+        String.list_of_string_of_list ['n';'u';'l';'l'];
+        list_of_string_eq null (String.string_of_list ['n';'u';'l';'l'])
+    )
+and
+parse_json_object_termination (object: json_object) (s: string):
+  Lemma
+  (ensures (matching_parse_result (render_json_object object) ((render_json_object object) ^ s) parse_json_object))
+  =
+  admit()
+and
+parse_json_members_termination (members: json_members) (s: string):
+  Lemma
+  (requires (that_first_char_of s (fun c -> 
+    not(c = G.char_from_codepoint 0x2C) && // ','
+    not(is_char_whitespace c) &&
+    is_char_not_json_number_extendable c
+  ))) 
+  (ensures (matching_parse_result (render_json_members members) ((render_json_members members) ^ s) parse_json_members))
+  =
+  admit()
+and
+parse_json_member_termination (member: json_member) (s: string):
+  Lemma
+  (requires (that_first_char_of s (fun c -> 
+    not(is_char_whitespace c) && 
+    is_char_not_json_number_extendable c
+  )))
+  (ensures (matching_parse_result (render_json_member member) ((render_json_member member) ^ s) parse_json_member))
+  =
+  admit()
+and
+parse_json_array_termination (array: json_array) (s: string) :
+  Lemma
+  (ensures (matching_parse_result (render_json_array array) ((render_json_array array) ^ s) parse_json_array))
+  =
+  admit()
+and
+parse_json_elements_termination (elements: json_elements) (s: string):
+  Lemma
+  (requires (that_first_char_of s (fun c -> 
+    not(c = G.char_from_codepoint 0x2C) && // ','
+    not(is_char_whitespace c) &&
+    is_char_not_json_number_extendable c
+  ))) 
+  (ensures (matching_parse_result (render_json_elements elements) ((render_json_elements elements) ^ s) parse_json_elements))
+  =
+  admit()
+and
+parse_json_element_termination (element: json_element) (s: string):
+  Lemma
+  (requires (that_first_char_of s (fun c -> 
+    not(is_char_whitespace c) &&
+    is_char_not_json_number_extendable c
+  ))) 
+  (ensures (matching_parse_result (render_json_element element) ((render_json_element element) ^ s) parse_json_element))
+  =
+  admit()
 
 let rec parse_json_value_completeness (value: json_value) :
   Lemma
@@ -2298,8 +2531,16 @@ parse_json_element_completeness (element: json_element) :
   (ensures (parser_completeness parse_json_element render_json_element element))
   =
   admit()
-and
-parse_json_completeness (element: json) :
+
+let parse_json (s: string) : Tot (option (parser_result json)) (decreases %[(String.strlen s); 0]) = admit()
+
+let parse_json_soundness (s: string) : 
+  Lemma (requires (Some? (parse_json s))) 
+  (ensures (parser_soundness parse_json render_json s)) 
+  (decreases (String.strlen s))
+  = admit()
+
+let parse_json_completeness (element: json) :
   Lemma
   (ensures (parser_completeness parse_json render_json element))
   =
