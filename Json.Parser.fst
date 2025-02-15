@@ -2379,6 +2379,66 @@ let start_character_concat (s1 s2: string) :
       String.list_of_concat (G.char_to_str c) ((String.string_of_list tail) ^ s2)
     )
 
+// Helper lemma describe the start characters of a rendered json_value
+let json_value_start_character (value: json_value) :
+  Lemma
+  (ensures (
+    that_first_char_of (render_json_value value) (fun c -> 
+      c = (G.char_from_codepoint 0x7B) || // '{'
+      c = (G.char_from_codepoint 0x5B) || // '['
+      c = (G.char_from_codepoint 0x22) || // '"'
+      c = (G.char_from_codepoint 0x22) || // '"'
+      is_digit_char c || 
+      c = (G.char_from_codepoint 0x2D) || // "-"
+      c = (G.char_from_codepoint 0x74) || // "t"
+      c = (G.char_from_codepoint 0x66) || // "f"
+      c = (G.char_from_codepoint 0x6E) // "n"
+    )
+    &&
+    not(String.list_of_string (render_json_value value) = [])
+  ))
+  =
+  match value with
+    | ObjectValue object -> (
+      match object with
+        | EmptyObject c0 ws c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
+        )
+        | Object c0 members c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1))
+        )
+    )
+    | ArrayValue array -> (
+      match array with
+        | EmptyArray c0 ws c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
+        )
+        | Array c0 elems c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1))
+        )
+    )
+    | StringValue str -> json_string_start_character str
+    | NumberValue number -> json_number_start_character number
+    | BooleanValue s -> (
+      if s = "true" then
+      (
+        String.list_of_string_of_list ['t';'r';'u';'e'];
+        list_of_string_eq s (String.string_of_list ['t';'r';'u';'e'])
+      )
+      else
+      (
+        String.list_of_string_of_list ['f';'a';'l';'s';'e'];
+        list_of_string_eq s (String.string_of_list ['f';'a';'l';'s';'e'])
+      )
+    )
+    | NullValue s -> (
+      String.list_of_string_of_list ['n';'u';'l';'l'];
+      list_of_string_eq s (String.string_of_list ['n';'u';'l';'l'])
+    )
 
 // Termination proof is causing proving weirdness. Increasing Z3 resources.
 #set-options "--z3rlimit 1000"
@@ -2391,78 +2451,77 @@ let rec parse_json_value_termination (value: json_value) (s: string):
   ))
   (decreases %[(String.strlen (render_json_value value)); 1])
   =
-  // let rendered_value = render_json_value value in
-  // // Helper lemma to make the proof easier showing that appending s doesn't affect which parser we dispatch to
-  // start_character_concat rendered_value s;
-  // match value with
-  //   | ObjectValue object -> (
-  //     parse_json_object_termination object s;
-  //     // Prove that object renders into a string starting with '{' which lets us proceed with the object termination proof 
-  //     // We also need to prove that rendered_object^s starts with '{' to make object termination proof useful.
-  //     match object with
-  //       | EmptyObject c0 ws c1 -> (
-  //         String.list_of_string_of_list [c0];
-  //         String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
-  //       )
-  //       | Object c0 members c1 -> (
-  //         String.list_of_string_of_list [c0];
-  //         String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1))
-  //       )
-  //   )
-  //   | ArrayValue array -> (
-  //     parse_json_array_termination array s;
-  //     // Prove that array renders into a string starting with '[' which lets us proceed with the array termination proof 
-  //     // We also need to prove that rendered_object^s starts with '[' to make array termination proof useful.
-  //     match array with
-  //       | EmptyArray c0 ws c1 -> (
-  //         String.list_of_string_of_list [c0];
-  //         String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
-  //       )
-  //       | Array c0 elems c1 -> (
-  //         String.list_of_string_of_list [c0];
-  //         String.list_of_concat (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1))
-  //       )
-  //   )
-  //   | StringValue j_string -> (
-  //     parse_json_string_termination j_string s;
-  //     postpend_empty_is_identity (render_json_string j_string);
-  //     parse_json_string_completeness j_string;
+  let rendered_value = render_json_value value in
+  // Helper lemma to make the proof easier showing that appending s doesn't affect which parser we dispatch to
+  start_character_concat rendered_value s;
+  match value with
+    | ObjectValue object -> (
+      parse_json_object_termination object s;
+      // Prove that object renders into a string starting with '{' which lets us proceed with the object termination proof 
+      // We also need to prove that rendered_object^s starts with '{' to make object termination proof useful.
+      match object with
+        | EmptyObject c0 ws c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
+        )
+        | Object c0 members c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1))
+        )
+    )
+    | ArrayValue array -> (
+      parse_json_array_termination array s;
+      // Prove that array renders into a string starting with '[' which lets us proceed with the array termination proof 
+      // We also need to prove that rendered_object^s starts with '[' to make array termination proof useful.
+      match array with
+        | EmptyArray c0 ws c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1))
+        )
+        | Array c0 elems c1 -> (
+          String.list_of_string_of_list [c0];
+          String.list_of_concat (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1))
+        )
+    )
+    | StringValue j_string -> (
+      parse_json_string_termination j_string s;
+      postpend_empty_is_identity (render_json_string j_string);
+      parse_json_string_completeness j_string;
 
-  //     let String c0 chars c1 = j_string in 
-  //     String.list_of_string_of_list [c0];
-  //     String.list_of_concat (G.char_to_str c0) ((render_json_characters chars) ^ (G.char_to_str c1))
-  //   )
-  //   | NumberValue number -> (
-  //     parse_json_number_termination number s;
-  //     postpend_empty_is_identity (render_json_number number);
-  //     parse_json_number_completeness number;
-  //     json_number_start_character number
-  //   )
-  //   | BooleanValue boolean -> (
-  //     String.list_of_concat rendered_value s;
-  //     if boolean = "true" then
-  //     (
-  //       String.list_of_string_of_list ['t';'r';'u';'e'];
-  //       list_of_string_eq boolean (String.string_of_list ['t';'r';'u';'e']);
-  //       let c1::c2::c3::c4::tail = String.list_of_string rendered_value in
-  //       string_of_list_eq tail []
-  //     )
-  //     else
-  //     (
-  //       String.list_of_string_of_list ['f';'a';'l';'s';'e'];
-  //       list_of_string_eq boolean (String.string_of_list ['f';'a';'l';'s';'e']);
-  //       let c1::c2::c3::c4::c5::tail = String.list_of_string rendered_value in
-  //       string_of_list_eq tail []
-  //     )
-  //   )
-  //   | NullValue null -> (
-  //       String.list_of_concat null s;
-  //       String.list_of_string_of_list ['n';'u';'l';'l'];
-  //       list_of_string_eq null (String.string_of_list ['n';'u';'l';'l']);
-  //       let c1::c2::c3::c4::tail = String.list_of_string rendered_value in
-  //       string_of_list_eq tail []
-  //   )
-  admit()
+      let String c0 chars c1 = j_string in 
+      String.list_of_string_of_list [c0];
+      String.list_of_concat (G.char_to_str c0) ((render_json_characters chars) ^ (G.char_to_str c1))
+    )
+    | NumberValue number -> (
+      parse_json_number_termination number s;
+      postpend_empty_is_identity (render_json_number number);
+      parse_json_number_completeness number;
+      json_number_start_character number
+    )
+    | BooleanValue boolean -> (
+      String.list_of_concat rendered_value s;
+      if boolean = "true" then
+      (
+        String.list_of_string_of_list ['t';'r';'u';'e'];
+        list_of_string_eq boolean (String.string_of_list ['t';'r';'u';'e']);
+        let c1::c2::c3::c4::tail = String.list_of_string rendered_value in
+        string_of_list_eq tail []
+      )
+      else
+      (
+        String.list_of_string_of_list ['f';'a';'l';'s';'e'];
+        list_of_string_eq boolean (String.string_of_list ['f';'a';'l';'s';'e']);
+        let c1::c2::c3::c4::c5::tail = String.list_of_string rendered_value in
+        string_of_list_eq tail []
+      )
+    )
+    | NullValue null -> (
+        String.list_of_concat null s;
+        String.list_of_string_of_list ['n';'u';'l';'l'];
+        list_of_string_eq null (String.string_of_list ['n';'u';'l';'l']);
+        let c1::c2::c3::c4::tail = String.list_of_string rendered_value in
+        string_of_list_eq tail []
+    )
 and
 parse_json_object_termination (object: json_object) (s: string):
   Lemma
@@ -2472,187 +2531,186 @@ parse_json_object_termination (object: json_object) (s: string):
   ))
   (decreases %[(String.strlen (render_json_object object)); 0])
   =
-  // let rendered_object = render_json_object object in
-  // match object with
-  //   | EmptyObject c0 ws c1 -> (
-  //     String.list_of_string_of_list [c0];
-  //     String.list_of_string_of_list [c1];
-  //     // Handle render_json_object object case
-  //     String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1));
-  //     String.string_of_list_of_string ((render_json_ws ws) ^ (G.char_to_str c1));
-  //     parse_json_ws_termination (render_json_ws ws) (G.char_to_str c1);
-  //     parse_json_ws_completeness ws;
-  //     parse_json_ws_soundness ((render_json_ws ws) ^ (G.char_to_str c1));
-  //     let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws) ^ (G.char_to_str c1)) in
-  //     String.concat_injective (render_json_ws ws) (render_json_ws parsed_ws) (G.char_to_str c1) remainder;
-  //     assert(remainder == (G.char_to_str c1));
-  //     let c'::tail' = String.list_of_string remainder in
-  //     string_of_list_eq tail' []; // Finish completeness proof
+  let rendered_object = render_json_object object in
+  match object with
+    | EmptyObject c0 ws c1 -> (
+      String.list_of_string_of_list [c0];
+      String.list_of_string_of_list [c1];
+      // Handle render_json_object object case
+      String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1));
+      String.string_of_list_of_string ((render_json_ws ws) ^ (G.char_to_str c1));
+      parse_json_ws_termination (render_json_ws ws) (G.char_to_str c1);
+      parse_json_ws_completeness ws;
+      parse_json_ws_soundness ((render_json_ws ws) ^ (G.char_to_str c1));
+      let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws) ^ (G.char_to_str c1)) in
+      String.concat_injective (render_json_ws ws) (render_json_ws parsed_ws) (G.char_to_str c1) remainder;
+      assert(remainder == (G.char_to_str c1));
+      let c'::tail' = String.list_of_string remainder in
+      string_of_list_eq tail' []; // Finish completeness proof
 
-  //     // Handle (render_json_object object) ^ s case
-  //     str_concat_assoc (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1)) s;
-  //     str_concat_assoc (render_json_ws ws) (G.char_to_str c1) s;
-  //     String.list_of_concat (G.char_to_str c1) s;
-  //     String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
-  //     String.string_of_list_of_string ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
-  //     parse_json_ws_termination (render_json_ws ws) ((G.char_to_str c1) ^ s);
-  //     parse_json_ws_soundness ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
-  //     let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws) ^ (G.char_to_str c1) ^ s) in
-  //     String.concat_injective (render_json_ws ws) (render_json_ws parsed_ws) ((G.char_to_str c1) ^ s) remainder;
-  //     assert(remainder == (G.char_to_str c1) ^ s)
-  //   )
-  //   | Object c0 members c1 -> (
-  //     String.list_of_string_of_list [c0];
-  //     String.list_of_string_of_list [c1];
-  //     // Handle render_json_object object case
-  //     String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1));
-  //     String.concat_length (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1));
-  //     String.string_of_list_of_string ((render_json_members members) ^ (G.char_to_str c1));
-  //     let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_members members) ^ (G.char_to_str c1)) in
+      // Handle (render_json_object object) ^ s case
+      str_concat_assoc (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1)) s;
+      str_concat_assoc (render_json_ws ws) (G.char_to_str c1) s;
+      String.list_of_concat (G.char_to_str c1) s;
+      String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
+      String.string_of_list_of_string ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
+      parse_json_ws_termination (render_json_ws ws) ((G.char_to_str c1) ^ s);
+      parse_json_ws_soundness ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
+      let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws) ^ (G.char_to_str c1) ^ s) in
+      String.concat_injective (render_json_ws ws) (render_json_ws parsed_ws) ((G.char_to_str c1) ^ s) remainder;
+      assert(remainder == (G.char_to_str c1) ^ s)
+    )
+    | Object c0 members c1 -> (
+      String.list_of_string_of_list [c0];
+      String.list_of_string_of_list [c1];
+      // Handle render_json_object object case
+      String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1));
+      String.concat_length (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1));
+      String.string_of_list_of_string ((render_json_members members) ^ (G.char_to_str c1));
+      let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_members members) ^ (G.char_to_str c1)) in
 
-  //     // Handle render_json_object ^ s object case
-  //     str_concat_assoc (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1)) s;
-  //     str_concat_assoc (render_json_members members) (G.char_to_str c1) s;
-  //     String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1) ^ s);
-  //     String.string_of_list_of_string ((render_json_members members) ^ (G.char_to_str c1) ^ s);
-  //     let { result=parsed_ws_s; remainder=remainder_s } = parse_json_ws ((render_json_members members) ^ (G.char_to_str c1) ^ s) in
+      // Handle render_json_object ^ s object case
+      str_concat_assoc (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1)) s;
+      str_concat_assoc (render_json_members members) (G.char_to_str c1) s;
+      String.list_of_concat (G.char_to_str c0) ((render_json_members members) ^ (G.char_to_str c1) ^ s);
+      String.string_of_list_of_string ((render_json_members members) ^ (G.char_to_str c1) ^ s);
+      let { result=parsed_ws_s; remainder=remainder_s } = parse_json_ws ((render_json_members members) ^ (G.char_to_str c1) ^ s) in
 
-  //     // Decompose member into parts
-  //     match members with
-  //       | SingletonMember (Member ws0 str ws1 colon elem) -> (
-  //         // Handle render_json_object object case
-  //         str_concat_assoc (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) (G.char_to_str c1);
-  //         // Prep for json_ws termination by proving start character is a quote from the string
-  //         str_concat_assoc (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) (G.char_to_str c1);
-  //         json_string_start_character str;
-  //         start_character_concat (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1));
-  //         parse_json_ws_termination (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1));
-  //         parse_json_ws_completeness ws0;
-  //         parse_json_ws_soundness ((render_json_ws ws0) ^ (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1)));
-  //         String.concat_injective (render_json_ws ws0) (render_json_ws parsed_ws) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1)) remainder;
-  //         concat_length (render_json_ws parsed_ws) remainder;
-  //         // Sanity check
-  //         assert(parsed_ws == ws0);
-  //         assert(remainder == (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1)));
-  //         // Prep for json_members termination
-  //         assert(String.strlen remainder < String.strlen rendered_object);
-  //         concat_length ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) (G.char_to_str c1);
-  //         assert(String.strlen ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) < String.strlen rendered_object);
-  //         // Force this part of the string into a valid json_members element
-  //         prepend_empty_is_identity ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
-  //         parse_json_members_termination (SingletonMember (Member NoWhitespace str ws1 colon elem)) (G.char_to_str c1);
-  //         parse_json_members_soundness remainder;
-  //         let Some { result=parsed_members; remainder=remainder' } = parse_json_members remainder in
-  //         let SingletonMember (Member ws0' str' ws1' colon' elem') = parsed_members in
-  //         assert(ws0' = NoWhitespace); // Sanity check completeness proof
-  //         assert(str = str');
-  //         assert(ws1 = ws1');
-  //         assert(colon = colon');
-  //         assert(elem = elem');
-  //         String.concat_injective 
-  //           ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem))
-  //           (render_json_members parsed_members)
-  //           (G.char_to_str c1)
-  //           remainder';
-  //         assert(remainder' = G.char_to_str c1);
-  //         let c''::tail'' = String.list_of_string remainder' in
-  //         string_of_list_eq tail'' [];
-  //         assert(parser_completeness parse_json_object render_json_object object);
+      // Decompose member into parts
+      match members with
+        | SingletonMember (Member ws0 str ws1 colon elem) -> (
+          // Handle render_json_object object case
+          str_concat_assoc (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) (G.char_to_str c1);
+          // Prep for json_ws termination by proving start character is a quote from the string
+          str_concat_assoc (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) (G.char_to_str c1);
+          json_string_start_character str;
+          start_character_concat (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1));
+          parse_json_ws_termination (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1));
+          parse_json_ws_completeness ws0;
+          parse_json_ws_soundness ((render_json_ws ws0) ^ (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1)));
+          String.concat_injective (render_json_ws ws0) (render_json_ws parsed_ws) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1)) remainder;
+          concat_length (render_json_ws parsed_ws) remainder;
+          // Sanity check
+          assert(parsed_ws == ws0);
+          assert(remainder == (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ (G.char_to_str c1)));
+          // Prep for json_members termination
+          assert(String.strlen remainder < String.strlen rendered_object);
+          concat_length ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) (G.char_to_str c1);
+          assert(String.strlen ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) < String.strlen rendered_object);
+          // Force this part of the string into a valid json_members element
+          prepend_empty_is_identity ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+          parse_json_members_termination (SingletonMember (Member NoWhitespace str ws1 colon elem)) (G.char_to_str c1);
+          parse_json_members_soundness remainder;
+          let Some { result=parsed_members; remainder=remainder' } = parse_json_members remainder in
+          let SingletonMember (Member ws0' str' ws1' colon' elem') = parsed_members in
+          assert(ws0' = NoWhitespace); // Sanity check completeness proof
+          assert(str = str');
+          assert(ws1 = ws1');
+          assert(colon = colon');
+          assert(elem = elem');
+          String.concat_injective 
+            ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem))
+            (render_json_members parsed_members)
+            (G.char_to_str c1)
+            remainder';
+          assert(remainder' = G.char_to_str c1);
+          let c''::tail'' = String.list_of_string remainder' in
+          string_of_list_eq tail'' [];
+          assert(parser_completeness parse_json_object render_json_object object);
 
-  //         // Handle render_json_object ^ s object case
-  //         str_concat_assoc (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str c1) ^ s);
-  //         str_concat_assoc (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str c1) ^ s);
-  //         start_character_concat (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s));
-  //         parse_json_ws_termination (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s));
-  //         parse_json_ws_soundness ((render_json_ws ws0) ^ (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s)));
-  //         String.concat_injective (render_json_ws ws0) (render_json_ws parsed_ws_s) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s)) remainder_s;
-  //         concat_length (render_json_ws parsed_ws_s) remainder_s;
-  //         concat_length ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str c1) ^ s);
-  //         String.list_of_concat (G.char_to_str c1) s;
-  //         parse_json_members_termination (SingletonMember (Member NoWhitespace str ws1 colon elem)) ((G.char_to_str c1) ^ s);
-  //         parse_json_members_soundness remainder_s;
-  //         let Some { result=parsed_members_s; remainder=remainder_s' } = parse_json_members remainder_s in
-  //         String.concat_injective 
-  //           ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem))
-  //           (render_json_members parsed_members_s)
-  //           ((G.char_to_str c1) ^ s)
-  //           remainder_s'
-  //       )
-  //       | Members (Member ws0 str ws1 colon elem) comma members' -> (
-  //         // Basically the same proof as the SingletonMember case with some rearranging
-  //         // Handle render_json_object object case
-  //         str_concat_assoc (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str comma) ^ render_json_members members');
-  //         str_concat_assoc (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) (G.char_to_str c1);
-  //         str_concat_assoc (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str comma) ^ render_json_members members');
-  //         str_concat_assoc (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) (G.char_to_str c1);
+          // Handle render_json_object ^ s object case
+          str_concat_assoc (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str c1) ^ s);
+          str_concat_assoc (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str c1) ^ s);
+          start_character_concat (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s));
+          parse_json_ws_termination (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s));
+          parse_json_ws_soundness ((render_json_ws ws0) ^ (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s)));
+          String.concat_injective (render_json_ws ws0) (render_json_ws parsed_ws_s) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str c1) ^ s)) remainder_s;
+          concat_length (render_json_ws parsed_ws_s) remainder_s;
+          concat_length ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str c1) ^ s);
+          String.list_of_concat (G.char_to_str c1) s;
+          parse_json_members_termination (SingletonMember (Member NoWhitespace str ws1 colon elem)) ((G.char_to_str c1) ^ s);
+          parse_json_members_soundness remainder_s;
+          let Some { result=parsed_members_s; remainder=remainder_s' } = parse_json_members remainder_s in
+          String.concat_injective 
+            ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem))
+            (render_json_members parsed_members_s)
+            ((G.char_to_str c1) ^ s)
+            remainder_s'
+        )
+        | Members (Member ws0 str ws1 colon elem) comma members' -> (
+          // Basically the same proof as the SingletonMember case with some rearranging
+          // Handle render_json_object object case
+          str_concat_assoc (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str comma) ^ render_json_members members');
+          str_concat_assoc (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) (G.char_to_str c1);
+          str_concat_assoc (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ((G.char_to_str comma) ^ render_json_members members');
+          str_concat_assoc (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) (G.char_to_str c1);
 
-  //         // Prep for json_ws termination by proving start character is a quote from the string
-  //         json_string_start_character str;
-  //         start_character_concat (render_json_string str) ((((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1));
-  //         parse_json_ws_termination (render_json_ws ws0) ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1));
-  //         parse_json_ws_completeness ws0;
-  //         parse_json_ws_soundness ((render_json_ws ws0) ^ ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1)));
-  //         String.concat_injective 
-  //           (render_json_ws ws0) 
-  //           (render_json_ws parsed_ws) 
-  //           ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1))
-  //           remainder;
-  //         concat_length (render_json_ws parsed_ws) remainder;
-  //         // Sanity check
-  //         assert(parsed_ws == ws0);
-  //         assert(remainder == ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1)));
-  //         // Prep for json_members termination
-  //         assert(String.strlen remainder < String.strlen rendered_object);
-  //         concat_length (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) (G.char_to_str c1);
-  //         assert(String.strlen (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) < String.strlen rendered_object);
-  //         // Force this part of the string into a valid json_members element
-  //         prepend_empty_is_identity ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
-  //         parse_json_members_termination (Members (Member NoWhitespace str ws1 colon elem) comma members') (G.char_to_str c1);
-  //         parse_json_members_soundness remainder;
-  //         let Some { result=parsed_members; remainder=remainder' } = parse_json_members remainder in
-  //         let Members (Member ws0' str' ws1' colon' elem') comma' members'' = parsed_members in
-  //         assert(ws0' = NoWhitespace); // Sanity check completeness proof
-  //         assert(str = str');
-  //         assert(ws1 = ws1');
-  //         assert(colon = colon');
-  //         assert(elem = elem');
-  //         assert(comma = comma');
-  //         assert(members' = members'');
+          // Prep for json_ws termination by proving start character is a quote from the string
+          json_string_start_character str;
+          start_character_concat (render_json_string str) ((((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1));
+          parse_json_ws_termination (render_json_ws ws0) ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1));
+          parse_json_ws_completeness ws0;
+          parse_json_ws_soundness ((render_json_ws ws0) ^ ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1)));
+          String.concat_injective 
+            (render_json_ws ws0) 
+            (render_json_ws parsed_ws) 
+            ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1))
+            remainder;
+          concat_length (render_json_ws parsed_ws) remainder;
+          // Sanity check
+          assert(parsed_ws == ws0);
+          assert(remainder == ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1)));
+          // Prep for json_members termination
+          assert(String.strlen remainder < String.strlen rendered_object);
+          concat_length (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) (G.char_to_str c1);
+          assert(String.strlen (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) < String.strlen rendered_object);
+          // Force this part of the string into a valid json_members element
+          prepend_empty_is_identity ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+          parse_json_members_termination (Members (Member NoWhitespace str ws1 colon elem) comma members') (G.char_to_str c1);
+          parse_json_members_soundness remainder;
+          let Some { result=parsed_members; remainder=remainder' } = parse_json_members remainder in
+          let Members (Member ws0' str' ws1' colon' elem') comma' members'' = parsed_members in
+          assert(ws0' = NoWhitespace); // Sanity check completeness proof
+          assert(str = str');
+          assert(ws1 = ws1');
+          assert(colon = colon');
+          assert(elem = elem');
+          assert(comma = comma');
+          assert(members' = members'');
 
-  //         String.concat_injective 
-  //           (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members'))
-  //           (render_json_members parsed_members)
-  //           (G.char_to_str c1)
-  //           remainder';
-  //         assert(remainder' = G.char_to_str c1);
-  //         let c''::tail'' = String.list_of_string remainder' in
-  //         string_of_list_eq tail'' [];
-  //         assert(parser_completeness parse_json_object render_json_object object);
+          String.concat_injective 
+            (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members'))
+            (render_json_members parsed_members)
+            (G.char_to_str c1)
+            remainder';
+          assert(remainder' = G.char_to_str c1);
+          let c''::tail'' = String.list_of_string remainder' in
+          string_of_list_eq tail'' [];
+          assert(parser_completeness parse_json_object render_json_object object);
 
-  //         // Handle render_json_object ^ s object case
-  //         str_concat_assoc (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ((G.char_to_str c1) ^ s);
-  //         str_concat_assoc (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ((G.char_to_str c1) ^ s);
-  //         start_character_concat (render_json_string str) ((((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s);
-  //         parse_json_ws_termination (render_json_ws ws0) ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s);
-  //         parse_json_ws_soundness ((render_json_ws ws0) ^ ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s));
-  //         String.concat_injective 
-  //           (render_json_ws ws0) 
-  //           (render_json_ws parsed_ws_s) 
-  //           ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s)
-  //           remainder_s;
-  //         concat_length (render_json_ws parsed_ws_s) remainder_s;
-  //         String.list_of_concat (G.char_to_str c1) s;
-  //         parse_json_members_termination (Members (Member NoWhitespace str ws1 colon elem) comma members') ((G.char_to_str c1) ^ s);
-  //         parse_json_members_soundness remainder_s;
-  //         let Some { result=parsed_members_s; remainder=remainder_s' } = parse_json_members remainder_s in
-  //         String.concat_injective 
-  //           (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members'))
-  //           (render_json_members parsed_members_s)
-  //           ((G.char_to_str c1) ^ s)
-  //           remainder_s'
-  //       )
-  //   )
-  admit()
+          // Handle render_json_object ^ s object case
+          str_concat_assoc (render_json_ws ws0) (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ((G.char_to_str c1) ^ s);
+          str_concat_assoc (render_json_string str) (((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ((G.char_to_str c1) ^ s);
+          start_character_concat (render_json_string str) ((((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s);
+          parse_json_ws_termination (render_json_ws ws0) ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s);
+          parse_json_ws_soundness ((render_json_ws ws0) ^ ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s));
+          String.concat_injective 
+            (render_json_ws ws0) 
+            (render_json_ws parsed_ws_s) 
+            ((((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members')) ^ (G.char_to_str c1) ^ s)
+            remainder_s;
+          concat_length (render_json_ws parsed_ws_s) remainder_s;
+          String.list_of_concat (G.char_to_str c1) s;
+          parse_json_members_termination (Members (Member NoWhitespace str ws1 colon elem) comma members') ((G.char_to_str c1) ^ s);
+          parse_json_members_soundness remainder_s;
+          let Some { result=parsed_members_s; remainder=remainder_s' } = parse_json_members remainder_s in
+          String.concat_injective 
+            (((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) ^ ((G.char_to_str comma) ^ render_json_members members'))
+            (render_json_members parsed_members_s)
+            ((G.char_to_str c1) ^ s)
+            remainder_s'
+        )
+    )
 and
 parse_json_members_termination (members: json_members) (s: string):
   Lemma
@@ -2667,60 +2725,59 @@ parse_json_members_termination (members: json_members) (s: string):
   ))
   (decreases %[(String.strlen (render_json_members members)); 4])
   =
-  // let rendered_members = render_json_members members in
+  let rendered_members = render_json_members members in
 
-  // String.concat_length rendered_members s;
-  // match members with
-  //   | SingletonMember member -> (
-  //     parse_json_member_termination member s;
-  //     let Some { result=parsed_member; remainder=remainder } = parse_json_member rendered_members in
-  //     let Some { result=parsed_member_s; remainder=remainder_s } = parse_json_member (rendered_members ^ s) in
+  String.concat_length rendered_members s;
+  match members with
+    | SingletonMember member -> (
+      parse_json_member_termination member s;
+      let Some { result=parsed_member; remainder=remainder } = parse_json_member rendered_members in
+      let Some { result=parsed_member_s; remainder=remainder_s } = parse_json_member (rendered_members ^ s) in
 
-  //     list_of_string_eq remainder "";
-  //     parse_json_member_soundness (rendered_members ^ s);
-  //     String.concat_injective
-  //       (render_json_member member)
-  //       (render_json_member parsed_member_s)
-  //       s
-  //       remainder_s
-  //   )
-  //   | Members member comma members' -> (
-  //     // Handle rendered_members case
-  //     str_concat_assoc (render_json_member member) (G.char_to_str comma) (render_json_members members');
-  //     String.list_of_string_of_list [comma];
-  //     start_character_concat (G.char_to_str comma) (render_json_members members');
-  //     String.concat_length (render_json_member member) ((G.char_to_str comma) ^ (render_json_members members'));
-  //     parse_json_member_termination member ((G.char_to_str comma) ^ (render_json_members members'));
-  //     parse_json_member_soundness ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members')));
+      list_of_string_eq remainder "";
+      parse_json_member_soundness (rendered_members ^ s);
+      String.concat_injective
+        (render_json_member member)
+        (render_json_member parsed_member_s)
+        s
+        remainder_s
+    )
+    | Members member comma members' -> (
+      // Handle rendered_members case
+      str_concat_assoc (render_json_member member) (G.char_to_str comma) (render_json_members members');
+      String.list_of_string_of_list [comma];
+      start_character_concat (G.char_to_str comma) (render_json_members members');
+      String.concat_length (render_json_member member) ((G.char_to_str comma) ^ (render_json_members members'));
+      parse_json_member_termination member ((G.char_to_str comma) ^ (render_json_members members'));
+      parse_json_member_soundness ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members')));
 
-  //     let Some { result=parsed_member; remainder=remainder } = parse_json_member ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members'))) in
-  //     String.concat_injective
-  //       (render_json_member member)
-  //       (render_json_member parsed_member)
-  //       ((G.char_to_str comma) ^ (render_json_members members'))
-  //       remainder;
-  //     assert(remainder == ((G.char_to_str comma) ^ (render_json_members members')));
-  //     String.list_of_concat (G.char_to_str comma) (render_json_members members');
-  //     String.string_of_list_of_string (render_json_members members');
+      let Some { result=parsed_member; remainder=remainder } = parse_json_member ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members'))) in
+      String.concat_injective
+        (render_json_member member)
+        (render_json_member parsed_member)
+        ((G.char_to_str comma) ^ (render_json_members members'))
+        remainder;
+      assert(remainder == ((G.char_to_str comma) ^ (render_json_members members')));
+      String.list_of_concat (G.char_to_str comma) (render_json_members members');
+      String.string_of_list_of_string (render_json_members members');
 
-  //     // Handle rendered_members ^ s case
-  //     str_concat_assoc (render_json_member member) ((G.char_to_str comma) ^ (render_json_members members')) s;
-  //     str_concat_assoc (G.char_to_str comma) (render_json_members members') s;
-  //     start_character_concat (G.char_to_str comma) ((render_json_members members') ^ s);
-  //     parse_json_member_termination member ((G.char_to_str comma) ^ (render_json_members members') ^ s);
-  //     parse_json_member_soundness ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members') ^ s));
-  //     let Some { result=parsed_member_s; remainder=remainder_s } = parse_json_member ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members') ^ s)) in
-  //     String.concat_injective
-  //       (render_json_member member)
-  //       (render_json_member parsed_member_s)
-  //       ((G.char_to_str comma) ^ (render_json_members members') ^ s)
-  //       remainder_s;
-  //     String.list_of_concat (G.char_to_str comma) ((render_json_members members') ^ s);
-  //     String.string_of_list_of_string ((render_json_members members') ^ s);
+      // Handle rendered_members ^ s case
+      str_concat_assoc (render_json_member member) ((G.char_to_str comma) ^ (render_json_members members')) s;
+      str_concat_assoc (G.char_to_str comma) (render_json_members members') s;
+      start_character_concat (G.char_to_str comma) ((render_json_members members') ^ s);
+      parse_json_member_termination member ((G.char_to_str comma) ^ (render_json_members members') ^ s);
+      parse_json_member_soundness ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members') ^ s));
+      let Some { result=parsed_member_s; remainder=remainder_s } = parse_json_member ((render_json_member member) ^ ((G.char_to_str comma) ^ (render_json_members members') ^ s)) in
+      String.concat_injective
+        (render_json_member member)
+        (render_json_member parsed_member_s)
+        ((G.char_to_str comma) ^ (render_json_members members') ^ s)
+        remainder_s;
+      String.list_of_concat (G.char_to_str comma) ((render_json_members members') ^ s);
+      String.string_of_list_of_string ((render_json_members members') ^ s);
 
-  //     parse_json_members_termination members' s
-  //   )
-    admit()
+      parse_json_members_termination members' s
+    )
 and
 parse_json_member_termination (member: json_member) (s: string):
   Lemma
@@ -2734,7 +2791,97 @@ parse_json_member_termination (member: json_member) (s: string):
   ))
   (decreases %[(String.strlen (render_json_member member)); 3])
   =
-  admit()
+  let Member ws0 str ws1 colon elem = member in
+  // Handle rendered_member case
+  let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws0) ^ (render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) in
+  json_string_start_character str;
+  start_character_concat (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+  parse_json_ws_termination (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+  parse_json_ws_completeness ws0;
+  parse_json_ws_soundness ((render_json_ws ws0) ^ (render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+  String.concat_injective
+    (render_json_ws ws0)
+    (render_json_ws parsed_ws)
+    ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem))
+    remainder;
+  String.concat_length (render_json_ws parsed_ws) remainder;
+
+  parse_json_string_termination str ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+  parse_json_string_completeness str;
+  parse_json_string_soundness ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+  let Some { result=parsed_string; remainder=remainder' } = parse_json_string remainder in
+  String.concat_injective
+    (render_json_string str)
+    (render_json_string parsed_string)
+    ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem))
+    remainder';
+  String.concat_length (render_json_string parsed_string) remainder';
+  
+  let { result=parsed_ws'; remainder=remainder'' } = parse_json_ws remainder' in
+  String.list_of_string_of_list [colon];
+  start_character_concat (G.char_to_str colon) (render_json_element elem);
+  parse_json_ws_termination (render_json_ws ws1) ((G.char_to_str colon) ^ (render_json_element elem));
+  parse_json_ws_completeness ws1;
+  parse_json_ws_soundness ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem));
+  String.concat_injective
+    (render_json_ws ws1)
+    (render_json_ws parsed_ws')
+    ((G.char_to_str colon) ^ (render_json_element elem))
+    remainder'';
+  String.concat_length (render_json_ws parsed_ws') remainder'';
+  
+  String.list_of_concat (G.char_to_str colon) (render_json_element elem);
+  String.concat_length (G.char_to_str colon) (render_json_element elem);
+  String.string_of_list_of_string (render_json_element elem);
+
+  // Handle rendered_member^s case
+  str_concat_assoc (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) s;
+  str_concat_assoc (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem)) s;
+  str_concat_assoc (render_json_ws ws1) ((G.char_to_str colon) ^ (render_json_element elem)) s;
+  str_concat_assoc (G.char_to_str colon) (render_json_element elem) s;
+  let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws0) ^ (render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s) in
+  json_string_start_character str;
+  start_character_concat (render_json_string str) ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s);
+  parse_json_ws_termination (render_json_ws ws0) ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s);
+  parse_json_ws_completeness ws0;
+  parse_json_ws_soundness ((render_json_ws ws0) ^ (render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s);
+  String.concat_injective
+    (render_json_ws ws0)
+    (render_json_ws parsed_ws)
+    ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s)
+    remainder;
+  String.concat_length (render_json_ws parsed_ws) remainder;
+
+  parse_json_string_termination str ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s);
+  parse_json_string_completeness str;
+  parse_json_string_soundness ((render_json_string str) ^ (render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s);
+  let Some { result=parsed_string; remainder=remainder' } = parse_json_string remainder in
+  String.concat_injective
+    (render_json_string str)
+    (render_json_string parsed_string)
+    ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s)
+    remainder';
+  String.concat_length (render_json_string parsed_string) remainder';
+  
+  let { result=parsed_ws'; remainder=remainder'' } = parse_json_ws remainder' in
+  String.list_of_string_of_list [colon];
+  start_character_concat (G.char_to_str colon) ((render_json_element elem) ^ s);
+  parse_json_ws_termination (render_json_ws ws1) ((G.char_to_str colon) ^ (render_json_element elem) ^ s);
+  parse_json_ws_completeness ws1;
+  parse_json_ws_soundness ((render_json_ws ws1) ^ (G.char_to_str colon) ^ (render_json_element elem) ^ s);
+  String.concat_injective
+    (render_json_ws ws1)
+    (render_json_ws parsed_ws')
+    ((G.char_to_str colon) ^ (render_json_element elem) ^ s)
+    remainder'';
+  String.concat_length (render_json_ws parsed_ws') remainder'';
+  
+  String.list_of_concat (G.char_to_str colon) ((render_json_element elem) ^ s);
+  String.concat_length (G.char_to_str colon) ((render_json_element elem) ^ s);
+  String.string_of_list_of_string ((render_json_element elem) ^ s);
+
+  // Invoke final termination/completeness proof
+  parse_json_element_termination elem s
 and
 parse_json_array_termination (array: json_array) (s: string) :
   Lemma
@@ -2744,7 +2891,197 @@ parse_json_array_termination (array: json_array) (s: string) :
   ))
   (decreases %[(String.strlen (render_json_array array)); 0])
   =
-  admit()
+  let rendered_array = render_json_array array in
+  match array with
+    | EmptyArray c0 ws c1 -> (
+      // Handle rendered_array case
+      String.list_of_string_of_list [c0];
+      String.list_of_string_of_list [c1];
+      String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1));
+      String.string_of_list_of_string ((render_json_ws ws) ^ (G.char_to_str c1));
+
+      let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws) ^ (G.char_to_str c1)) in
+      parse_json_ws_termination (render_json_ws ws) (G.char_to_str c1);
+      parse_json_ws_soundness ((render_json_ws ws) ^ (G.char_to_str c1));
+      parse_json_ws_completeness ws;
+      String.concat_injective
+        (render_json_ws ws)
+        (render_json_ws parsed_ws)
+        (G.char_to_str c1)
+        remainder;
+      let c'::tail' = String.list_of_string remainder in
+      string_of_list_eq tail' [];
+
+      // Handle rendered_array ^ s case
+      str_concat_assoc (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1)) s;
+      str_concat_assoc (render_json_ws ws) (G.char_to_str c1) s;
+
+      String.list_of_concat (G.char_to_str c0) ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
+      String.string_of_list_of_string ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
+
+      let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_ws ws) ^ (G.char_to_str c1) ^ s) in
+      start_character_concat (G.char_to_str c1) s;
+      parse_json_ws_termination (render_json_ws ws) ((G.char_to_str c1) ^ s);
+      parse_json_ws_soundness ((render_json_ws ws) ^ (G.char_to_str c1) ^ s);
+      String.concat_injective
+        (render_json_ws ws)
+        (render_json_ws parsed_ws)
+        ((G.char_to_str c1) ^ s)
+        remainder
+    )
+    | Array c0 elems c1 -> (
+      String.list_of_string_of_list [c0];
+      String.list_of_string_of_list [c1];
+
+      // Handle rendered_array case
+      String.list_of_concat (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1));
+      String.concat_length (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1));
+      String.string_of_list_of_string ((render_json_elements elems) ^ (G.char_to_str c1));
+      let { result=parsed_ws; remainder=remainder } = parse_json_ws ((render_json_elements elems) ^ (G.char_to_str c1)) in
+      parse_json_ws_soundness ((render_json_elements elems) ^ (G.char_to_str c1));
+      String.concat_length (render_json_ws parsed_ws) remainder;
+
+      // Handle rendered_array ^ s case
+      str_concat_assoc (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1)) s;
+      str_concat_assoc (render_json_elements elems) (G.char_to_str c1) s;
+      String.list_of_concat (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1) ^ s);
+      String.concat_length (G.char_to_str c0) ((render_json_elements elems) ^ (G.char_to_str c1) ^ s);
+      String.string_of_list_of_string ((render_json_elements elems) ^ (G.char_to_str c1) ^ s);
+      let { result=parsed_ws_s; remainder=remainder_s } = parse_json_ws ((render_json_elements elems) ^ (G.char_to_str c1) ^ s) in
+      parse_json_ws_soundness ((render_json_elements elems) ^ (G.char_to_str c1) ^ s);
+      String.concat_length (render_json_ws parsed_ws_s) remainder_s;
+
+      match elems with
+        | SingletonElements (Element ws0 value ws1) -> (
+          // Handle rendered_array case
+          str_concat_assoc (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1)) (G.char_to_str c1);
+          str_concat_assoc (render_json_value value) (render_json_ws ws1) (G.char_to_str c1);
+          json_value_start_character value;
+          start_character_concat (render_json_value value) ((render_json_ws ws1) ^ (G.char_to_str c1));
+          parse_json_ws_termination (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1) ^ (G.char_to_str c1));
+          parse_json_ws_completeness ws0;
+          String.concat_injective
+            (render_json_ws ws0)
+            (render_json_ws parsed_ws)
+            ((render_json_value value) ^ (render_json_ws ws1) ^ (G.char_to_str c1))
+            remainder;
+          assert(remainder == ((render_json_value value) ^ (render_json_ws ws1) ^ (G.char_to_str c1)));
+          prepend_empty_is_identity ((render_json_value value) ^ (render_json_ws ws1));
+          String.concat_length ((render_json_value value) ^ (render_json_ws ws1)) (G.char_to_str c1);
+
+          parse_json_elements_termination (SingletonElements (Element NoWhitespace value ws1)) (G.char_to_str c1);
+          parse_json_elements_soundness remainder;
+          let Some { result=SingletonElements (Element ws0' value' ws1'); remainder=remainder' } = parse_json_elements remainder in
+          let parsed_elements = SingletonElements (Element ws0' value' ws1') in
+          // Completeness sanity check
+          assert(NoWhitespace == ws0');
+          assert(value == value');
+          assert(ws1 = ws1');
+          String.concat_injective
+            ((render_json_value value) ^ (render_json_ws ws1))
+            (render_json_elements parsed_elements)
+            (G.char_to_str c1)
+            remainder';
+          assert(remainder' == G.char_to_str c1);
+          let c''::tail'' = String.list_of_string remainder' in
+          string_of_list_eq tail'' [];
+          assert(parser_completeness parse_json_array render_json_array array);
+
+          // Handle rendered_array ^ s case
+          str_concat_assoc (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1)) ((G.char_to_str c1) ^ s);
+          str_concat_assoc (render_json_value value) (render_json_ws ws1) ((G.char_to_str c1) ^ s);
+          start_character_concat (render_json_value value) ((render_json_ws ws1) ^ (G.char_to_str c1) ^ s);
+          parse_json_ws_termination (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1) ^ (G.char_to_str c1) ^ s);
+          String.concat_injective
+            (render_json_ws ws0)
+            (render_json_ws parsed_ws_s)
+            ((render_json_value value) ^ (render_json_ws ws1) ^ (G.char_to_str c1) ^ s)
+            remainder_s;
+          assert(remainder_s == ((render_json_value value) ^ (render_json_ws ws1) ^ (G.char_to_str c1) ^ s));
+
+          start_character_concat (G.char_to_str c1) s;
+          parse_json_elements_termination (SingletonElements (Element NoWhitespace value ws1)) ((G.char_to_str c1) ^ s);
+          parse_json_elements_soundness remainder_s;
+          let Some { result=parsed_elements_s; remainder=remainder_s' } = parse_json_elements remainder_s in
+          String.concat_injective
+            ((render_json_value value) ^ (render_json_ws ws1))
+            (render_json_elements parsed_elements_s)
+            ((G.char_to_str c1) ^ s)
+            remainder_s';
+          assert(remainder_s' == (G.char_to_str c1) ^ s);
+          String.list_of_concat (G.char_to_str c1) s
+        )
+        | Elements (Element ws0 value ws1) comma elems' -> (
+          // Handle rendered_array case
+          str_concat_assoc ((render_json_ws ws0) ^ (render_json_value value) ^ (render_json_ws ws1)) ((G.char_to_str comma) ^ (render_json_elements elems')) (G.char_to_str c1);
+          str_concat_assoc (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1)) ((G.char_to_str comma) ^ (render_json_elements elems') ^ (G.char_to_str c1));
+          str_concat_assoc (G.char_to_str comma) (render_json_elements elems') (G.char_to_str c1);
+          str_concat_assoc ((render_json_value value) ^ (render_json_ws ws1)) ((G.char_to_str comma) ^ (render_json_elements elems')) (G.char_to_str c1);
+
+          json_value_start_character value;
+          start_character_concat (render_json_value value) (render_json_ws ws1);
+          start_character_concat ((render_json_value value) ^ (render_json_ws ws1)) (((G.char_to_str comma) ^ (render_json_elements elems')) ^ (G.char_to_str c1));
+          parse_json_ws_termination (render_json_ws ws0) ((((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) ^ (G.char_to_str c1));
+          parse_json_ws_completeness ws0;
+          String.concat_injective
+            (render_json_ws ws0)
+            (render_json_ws parsed_ws)
+            ((((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) ^ (G.char_to_str c1))
+            remainder;
+          assert(remainder == ((((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) ^ (G.char_to_str c1)));
+          prepend_empty_is_identity ((render_json_value value) ^ (render_json_ws ws1));
+
+          String.concat_length (((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) (G.char_to_str c1);
+          parse_json_elements_termination (Elements (Element NoWhitespace value ws1) comma elems') (G.char_to_str c1);
+          parse_json_elements_soundness remainder;
+          let Some { result=Elements (Element ws0' value' ws1') comma' elems''; remainder=remainder' } = parse_json_elements remainder in
+          let parsed_elements = Elements (Element ws0' value' ws1') comma' elems'' in
+          // Sanity check completeness
+          assert(ws0' == NoWhitespace);
+          assert(value == value');
+          assert(ws1 == ws1');
+          assert(comma == comma');
+          assert(elems' == elems'');
+          String.concat_injective
+            (((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems')))
+            (render_json_elements parsed_elements)
+            (G.char_to_str c1)
+            remainder';
+            
+          let c''::tail'' = String.list_of_string remainder' in
+          string_of_list_eq tail'' [];
+          assert(parser_completeness parse_json_array render_json_array array);
+
+          // Handle rendered_array ^ s case
+          str_concat_assoc ((render_json_ws ws0) ^ (render_json_value value) ^ (render_json_ws ws1)) ((G.char_to_str comma) ^ (render_json_elements elems')) ((G.char_to_str c1) ^ s);
+          str_concat_assoc (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1)) ((G.char_to_str comma) ^ (render_json_elements elems') ^ ((G.char_to_str c1) ^ s));
+          str_concat_assoc (G.char_to_str comma) (render_json_elements elems') ((G.char_to_str c1) ^ s);
+          str_concat_assoc ((render_json_value value) ^ (render_json_ws ws1)) ((G.char_to_str comma) ^ (render_json_elements elems')) ((G.char_to_str c1) ^ s);
+
+          start_character_concat ((render_json_value value) ^ (render_json_ws ws1)) (((G.char_to_str comma) ^ (render_json_elements elems')) ^ ((G.char_to_str c1) ^ s));
+          parse_json_ws_termination (render_json_ws ws0) ((((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) ^ ((G.char_to_str c1) ^ s));
+          String.concat_injective
+            (render_json_ws ws0)
+            (render_json_ws parsed_ws_s)
+            ((((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) ^ ((G.char_to_str c1) ^ s))
+            remainder_s;
+          assert(remainder_s == ((((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) ^ (G.char_to_str c1) ^ s));
+          prepend_empty_is_identity ((render_json_value value) ^ (render_json_ws ws1));
+
+          String.concat_length (((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems'))) ((G.char_to_str c1) ^ s);
+          start_character_concat (G.char_to_str c1) s;
+          parse_json_elements_termination (Elements (Element NoWhitespace value ws1) comma elems') ((G.char_to_str c1) ^ s);
+          parse_json_elements_soundness remainder_s;
+          let Some { result=parsed_elements_s; remainder=remainder_s' } = parse_json_elements remainder_s in
+          String.concat_injective
+            (((render_json_value value) ^ (render_json_ws ws1)) ^ ((G.char_to_str comma) ^ (render_json_elements elems')))
+            (render_json_elements parsed_elements_s)
+            ((G.char_to_str c1) ^ s)
+            remainder_s';
+          assert(remainder_s' == ((G.char_to_str c1) ^ s));
+          String.list_of_concat (G.char_to_str c1) s
+        )
+    )
 and
 parse_json_elements_termination (elements: json_elements) (s: string):
   Lemma
@@ -2759,7 +3096,62 @@ parse_json_elements_termination (elements: json_elements) (s: string):
   ))
   (decreases %[(String.strlen (render_json_elements elements)); 3])
   =
-  admit()
+  let rendered_elements = render_json_elements elements in
+  match elements with
+    | SingletonElements elem -> (
+      // Handle rendered_elements case
+      parse_json_element_termination elem s;
+      let Some { result=parsed_element; remainder=remainder } = parse_json_element (render_json_element elem) in
+      list_of_string_eq remainder "";
+      assert(parser_completeness parse_json_elements render_json_elements elements);
+      
+      // Handle rendered_elements ^ s case
+      parse_json_element_soundness ((render_json_element elem) ^ s);
+      let Some { result=parsed_element_s; remainder=remainder_s } = parse_json_element ((render_json_element elem) ^ s) in
+      String.concat_injective
+        (render_json_element elem)
+        (render_json_element parsed_element_s)
+        s
+        remainder_s
+    )
+    | Elements elem comma elems' -> (
+      // Handle rendered_elements case
+      String.list_of_string_of_list [comma];
+      start_character_concat (G.char_to_str comma) (render_json_elements elems');
+      String.concat_length (render_json_element elem) ((G.char_to_str comma) ^ (render_json_elements elems'));
+      parse_json_element_termination elem ((G.char_to_str comma) ^ (render_json_elements elems'));
+      parse_json_element_soundness ((render_json_element elem) ^ (G.char_to_str comma) ^ (render_json_elements elems'));
+      let Some { result=parsed_element; remainder=remainder } = parse_json_element rendered_elements in
+      String.concat_length (render_json_element parsed_element) remainder;
+      String.concat_injective
+        (render_json_element elem) 
+        (render_json_element parsed_element) 
+        ((G.char_to_str comma) ^ (render_json_elements elems'))
+        remainder;
+      assert(remainder == ((G.char_to_str comma) ^ (render_json_elements elems')));
+      String.list_of_concat (G.char_to_str comma) (render_json_elements elems');
+      String.string_of_list_of_string (render_json_elements elems');
+      parse_json_elements_termination elems' s;
+      assert(parser_completeness parse_json_elements render_json_elements elements);
+
+      // Handle rendered_elements ^ s case
+      str_concat_assoc (render_json_element elem) ((G.char_to_str comma) ^ (render_json_elements elems')) s;
+      str_concat_assoc (G.char_to_str comma) (render_json_elements elems') s;
+      start_character_concat (G.char_to_str comma) ((render_json_elements elems') ^ s);
+      String.concat_length (render_json_element elem) ((G.char_to_str comma) ^ (render_json_elements elems') ^ s);
+      parse_json_element_termination elem ((G.char_to_str comma) ^ (render_json_elements elems') ^ s);
+      parse_json_element_soundness ((render_json_element elem) ^ (G.char_to_str comma) ^ (render_json_elements elems' ^ s));
+      let Some { result=parsed_element; remainder=remainder } = parse_json_element (rendered_elements ^ s) in
+      String.concat_length (render_json_element parsed_element) remainder;
+      String.concat_injective
+        (render_json_element elem) 
+        (render_json_element parsed_element) 
+        ((G.char_to_str comma) ^ (render_json_elements elems') ^ s)
+        remainder;
+      assert(remainder == ((G.char_to_str comma) ^ (render_json_elements elems') ^ s));
+      String.list_of_concat (G.char_to_str comma) ((render_json_elements elems') ^ s);
+      String.string_of_list_of_string ((render_json_elements elems') ^ s)
+    )
 and
 parse_json_element_termination (element: json_element) (s: string):
   Lemma
@@ -2773,7 +3165,72 @@ parse_json_element_termination (element: json_element) (s: string):
   ))
   (decreases %[(String.strlen (render_json_element element)); 2])
   =
-  admit()
+  let rendered_element = render_json_element element in
+  let Element ws0 value ws1 = element in
+  // Handle rendered_element case
+  json_value_start_character value;
+  start_character_concat (render_json_value value) (render_json_ws ws1);
+  parse_json_ws_termination (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1));
+  parse_json_ws_soundness ((render_json_ws ws0) ^ (render_json_value value) ^ (render_json_ws ws1));
+  parse_json_ws_completeness ws0;
+  let { result=parsed_ws; remainder=remainder } = parse_json_ws rendered_element in
+  String.concat_length (render_json_ws parsed_ws) remainder;
+  String.concat_injective
+    (render_json_ws ws0)
+    (render_json_ws parsed_ws)
+    ((render_json_value value) ^ (render_json_ws ws1))
+    remainder;
+  assert(remainder == ((render_json_value value) ^ (render_json_ws ws1)));
+  String.concat_length (render_json_value value) (render_json_ws ws1);
+  // Prove first character of ws1 is not json_number extendable
+  let json_ws_start_character (ws: json_ws) : Lemma (ensures (that_first_char_of (render_json_ws ws) (fun c -> is_char_not_json_number_extendable c))) =
+    match ws with
+      | NoWhitespace -> list_of_string_eq (render_json_ws ws) ""
+      | Whitespace c ws' -> (
+        String.list_of_string_of_list [c];
+        String.list_of_concat (G.char_to_str c) (render_json_ws ws')
+      )
+  in
+  json_ws_start_character ws1;
+  parse_json_value_termination value (render_json_ws ws1);
+  parse_json_value_soundness ((render_json_value value) ^ (render_json_ws ws1));
+  let Some { result=parsed_value; remainder=remainder' } = parse_json_value remainder in
+  String.concat_injective
+    (render_json_value value)
+    (render_json_value parsed_value)
+    (render_json_ws ws1)
+    remainder';
+  assert(remainder' == (render_json_ws ws1));
+  parse_json_ws_completeness ws1;
+  assert(parser_completeness parse_json_element render_json_element element);
+
+  // Handle rendered_element ^ s case
+  str_concat_assoc (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1)) s;
+  str_concat_assoc (render_json_value value) (render_json_ws ws1) s;
+  start_character_concat (render_json_value value) ((render_json_ws ws1) ^ s);
+  parse_json_ws_termination (render_json_ws ws0) ((render_json_value value) ^ (render_json_ws ws1) ^ s);
+  parse_json_ws_soundness ((render_json_ws ws0) ^ (render_json_value value) ^ (render_json_ws ws1) ^ s);
+  let { result=parsed_ws; remainder=remainder } = parse_json_ws (rendered_element ^ s) in
+  String.concat_length (render_json_ws parsed_ws) remainder;
+  String.concat_injective
+    (render_json_ws ws0)
+    (render_json_ws parsed_ws)
+    ((render_json_value value) ^ (render_json_ws ws1) ^ s)
+    remainder;
+  assert(remainder == ((render_json_value value) ^ (render_json_ws ws1) ^ s));
+  String.concat_length (render_json_value value) ((render_json_ws ws1) ^ s);
+  start_character_concat (render_json_ws ws1) s;
+  prepend_empty_is_identity s;
+  parse_json_value_termination value ((render_json_ws ws1) ^ s);
+  parse_json_value_soundness ((render_json_value value) ^ (render_json_ws ws1) ^ s);
+  let Some { result=parsed_value; remainder=remainder' } = parse_json_value remainder in
+  String.concat_injective
+    (render_json_value value)
+    (render_json_value parsed_value)
+    ((render_json_ws ws1) ^ s)
+    remainder';
+  assert(remainder' == (render_json_ws ws1) ^ s);
+  parse_json_ws_termination (render_json_ws ws1) s
 
 let rec parse_json_value_completeness (value: json_value) :
   Lemma
