@@ -3232,58 +3232,80 @@ parse_json_element_termination (element: json_element) (s: string):
   assert(remainder' == (render_json_ws ws1) ^ s);
   parse_json_ws_termination (render_json_ws ws1) s
 
-let rec parse_json_value_completeness (value: json_value) :
+let parse_json_value_completeness (value: json_value) :
   Lemma
   (ensures (parser_completeness parse_json_value render_json_value value))
   =
-  admit()
-and
-parse_json_object_completeness (object: json_object) :
+  empty_iff_len_zero "";
+  parse_json_value_termination value ""
+
+let parse_json_object_completeness (object: json_object) :
   Lemma
   (ensures (parser_completeness parse_json_object render_json_object object))
   =
-  admit()
-and
-parse_json_members_completeness (members: json_members) :
+  empty_iff_len_zero "";
+  parse_json_object_termination object ""
+  
+let parse_json_members_completeness (members: json_members) :
   Lemma
   (ensures (parser_completeness parse_json_members render_json_members members))
   =
-  admit()
-and
-parse_json_member_completeness (member: json_member) :
+  empty_iff_len_zero "";
+  parse_json_members_termination members ""
+
+let parse_json_member_completeness (member: json_member) :
   Lemma
   (ensures (parser_completeness parse_json_member render_json_member member))
   =
-  admit()
-and
-parse_json_array_completeness (array: json_array) :
+  empty_iff_len_zero "";
+  parse_json_member_termination member ""
+
+let parse_json_array_completeness (array: json_array) :
   Lemma
   (ensures (parser_completeness parse_json_array render_json_array array))
   =
-  admit()
-and
-parse_json_elements_completeness (elements: json_elements) :
+  empty_iff_len_zero "";
+  parse_json_array_termination array ""
+
+let parse_json_elements_completeness (elements: json_elements) :
   Lemma
   (ensures (parser_completeness parse_json_elements render_json_elements elements))
   =
-  admit()
-and
-parse_json_element_completeness (element: json_element) :
+  empty_iff_len_zero "";
+  parse_json_elements_termination elements ""
+
+let parse_json_element_completeness (element: json_element) :
   Lemma
   (ensures (parser_completeness parse_json_element render_json_element element))
   =
-  admit()
+  empty_iff_len_zero "";
+  parse_json_element_termination element ""
 
-let parse_json (s: string) : Tot (option (parser_result json)) (decreases %[(String.strlen s); 0]) = admit()
+
+let parse_json (s: string) : option json = 
+  let parsed_element = parse_json_element s in
+  match parsed_element with
+    | Some { result=elem; remainder=remainder } -> 
+      if remainder = "" then
+        Some (JSON elem)
+      else
+        None
+    | None -> None
 
 let parse_json_soundness (s: string) : 
   Lemma (requires (Some? (parse_json s))) 
-  (ensures (parser_soundness parse_json render_json s)) 
-  (decreases (String.strlen s))
-  = admit()
-
-let parse_json_completeness (element: json) :
-  Lemma
-  (ensures (parser_completeness parse_json render_json element))
+  (ensures (render_json (Some?.v (parse_json s)) == s)) 
   =
-  admit()
+  parse_json_element_soundness s;
+  let Some { result=elem; remainder=remainder } = parse_json_element s in
+  postpend_empty_is_identity (render_json_element elem)
+
+let parse_json_completeness (js: json) :
+  Lemma
+  (ensures (
+    Some? (parse_json (render_json js)) /\ 
+    js == Some?.v (parse_json (render_json js))
+  ))
+  =
+  let JSON elem = js in
+  parse_json_element_completeness elem
