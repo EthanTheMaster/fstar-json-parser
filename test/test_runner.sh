@@ -1,5 +1,5 @@
 #!/bin/bash
-# git clone https://github.com/nst/JSONTestSuite.git
+git clone https://github.com/nst/JSONTestSuite.git
 
 for filename in ./JSONTestSuite/test_parsing/*.json; do
     basename=$(basename $filename);
@@ -27,7 +27,9 @@ for filename in ./JSONTestSuite/test_parsing/*.json; do
         actual_result="Accept"
     fi
 
-    if [[ "$actual_result" == "$expected_result" || "$expected_result" == "Indeterminate" ]]; then
+    if [[ "$expected_result" == "Indeterminate" ]]; then
+        echo "$basename: Expected $expected_result, Got $actual_result, 🤷"
+    elif [[ "$actual_result" == "$expected_result" ]]; then
         echo "$basename: Expected $expected_result, Got $actual_result, ✅"
     else
         echo "$basename: Expected $expected_result, Got $actual_result, ❌"
